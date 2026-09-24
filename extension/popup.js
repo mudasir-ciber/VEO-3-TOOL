@@ -1,105 +1,103 @@
-// Popup Script for VEO 3 Bridge
-document.addEventListener("DOMContentLoaded", async () => {
-  const profileInput = document.getElementById("profileName");
-  const btnSave = document.getElementById("btnSaveProfile");
-  const instanceIdSpan = document.getElementById("instanceId");
-  const appStatusSpan = document.getElementById("appStatus");
-  const flowStatusSpan = document.getElementById("flowStatus");
-  const projectStatusSpan = document.getElementById("projectStatus");
-  const tabIdSpan = document.getElementById("tabId");
-  const opStatusSpan = document.getElementById("operationalStatus");
+// Popup controller for Chained Evolution Studio
+document.addEventListener("DOMContentLoaded", () => {
+  const btnOpenStudio = document.getElementById("btnOpenStudio");
+  const btnOpenSidePanel = document.getElementById("btnOpenSidePanel");
+  const btnOpenFlow = document.getElementById("btnOpenFlow");
   const btnRefresh = document.getElementById("btnRefresh");
 
-  // Load stored profile identity
-  chrome.storage.local.get(["profileName", "extensionInstanceId"], (data) => {
-    if (data.profileName) {
-      profileInput.value = data.profileName;
+  const elFlowStatus = document.getElementById("flowStatus");
+  const elProjectStatus = document.getElementById("projectStatus");
+  const elTabId = document.getElementById("tabId");
+  const elProfileName = document.getElementById("profileName");
+
+  // Open Studio Dashboard Tab
+  btnOpenStudio.addEventListener("click", async () => {
+    const studioUrl = chrome.runtime.getURL("studio.html");
+    const tabs = await chrome.tabs.query({ url: studioUrl });
+    if (tabs.length > 0) {
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      const win = await chrome.windows.get(tabs[0].windowId);
+      if (win) await chrome.windows.update(tabs[0].windowId, { focused: true });
+    } else {
+      await chrome.tabs.create({ url: studioUrl });
     }
-    if (data.extensionInstanceId) {
-      instanceIdSpan.textContent = data.extensionInstanceId;
+    window.close();
+  });
+
+  // Open Side Panel
+  btnOpenSidePanel.addEventListener("click", async () => {
+    try {
+      const win = await chrome.windows.getCurrent();
+      await chrome.sidePanel.open({ windowId: win.id });
+      window.close();
+    } catch (e) {
+      // Fallback to tab
+      chrome.tabs.create({ url: chrome.runtime.getURL("studio.html") });
+      window.close();
     }
   });
 
-  // Query background worker for live state
-  function updateState() {
-    chrome.runtime.sendMessage({ action: "GET_LIVE_STATUS" }, (res) => {
-      if (!res) return;
+  // Open Flow
+  btnOpenFlow.addEventListener("click", async () => {
+    chrome.tabs.create({ url: "https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4" });
+    window.close();
+  });
 
-      if (res.extensionInstanceId) {
-        instanceIdSpan.textContent = res.extensionInstanceId;
-      }
-      if (res.profileName && !profileInput.value) {
-        profileInput.value = res.profileName;
+  btnRefresh.addEventListener("click", checkStatus);
+
+  // Check Profile
+  chrome.storage.local.get(["profileName"], (res) => {
+    if (res.profileName) {
+      elProfileName.textContent = res.profileName;
+    }
+  });
+
+  checkStatus();
+
+  async function checkStatus() {
+    elFlowStatus.textContent = "CHECKING...";
+    elFlowStatus.className = "val";
+
+    try {
+      const tabs = await chrome.tabs.query({});
+      let foundTab = null;
+      let mismatchTab = null;
+
+      for (const tab of tabs) {
+        if (!tab.url) continue;
+        const u = tab.url.toLowerCase();
+        if (u.includes("flow.google.com") || u.includes("labs.google.com/flow")) {
+          if (u.includes("aa6e6e2c-c62d-43c6-88fe-56d75dff99e4")) {
+            foundTab = tab;
+            break;
+          } else {
+            mismatchTab = tab;
+          }
+        }
       }
 
-      // Desktop App Status
-      if (res.appConnected) {
-        appStatusSpan.textContent = "CONNECTED ✓";
-        appStatusSpan.className = "val green";
+      if (foundTab) {
+        elFlowStatus.textContent = "CONNECTED ✓";
+        elFlowStatus.className = "val green";
+        elProjectStatus.textContent = "aa6e6e2c-c62d... ✓";
+        elProjectStatus.className = "val green";
+        elTabId.textContent = String(foundTab.id);
+      } else if (mismatchTab) {
+        elFlowStatus.textContent = "MISMATCH ⚠️";
+        elFlowStatus.className = "val red";
+        elProjectStatus.textContent = "Wrong Project ID";
+        elProjectStatus.className = "val red";
+        elTabId.textContent = String(mismatchTab.id);
       } else {
-        appStatusSpan.textContent = "WAITING / OFFLINE";
-        appStatusSpan.className = "val yellow";
+        elFlowStatus.textContent = "NOT OPEN ✗";
+        elFlowStatus.className = "val red";
+        elProjectStatus.textContent = "No Flow Tab";
+        elProjectStatus.className = "val";
+        elTabId.textContent = "None";
       }
-
-      // Flow Tab Status
-      if (res.flowTabFound) {
-        flowStatusSpan.textContent = "CONNECTED ✓";
-        flowStatusSpan.className = "val green";
-      } else {
-        flowStatusSpan.textContent = "NOT FOUND";
-        flowStatusSpan.className = "val yellow";
-      }
-
-      // Project Status
-      if (res.projectVerified) {
-        projectStatusSpan.textContent = "VERIFIED ✓";
-        projectStatusSpan.className = "val green";
-      } else if (res.projectMismatch) {
-        projectStatusSpan.textContent = "MISMATCH ⚠";
-        projectStatusSpan.className = "val red";
-      } else if (res.flowLoading) {
-        projectStatusSpan.textContent = "LOADING...";
-        projectStatusSpan.className = "val yellow";
-      } else {
-        projectStatusSpan.textContent = "--";
-        projectStatusSpan.className = "val";
-      }
-
-      // Tab ID
-      tabIdSpan.textContent = res.flowTabId ? res.flowTabId.toString() : "None";
-
-      // Operational Status
-      opStatusSpan.textContent = res.operationalStatus || "IDLE";
-      if (res.operationalStatus === "PROCESSING") {
-        opStatusSpan.className = "val yellow bold";
-      } else {
-        opStatusSpan.className = "val green bold";
-      }
-    });
+    } catch (e) {
+      elFlowStatus.textContent = "ERROR";
+      elFlowStatus.className = "val red";
+    }
   }
-
-  // Save profile name
-  btnSave.addEventListener("click", () => {
-    const newName = profileInput.value.trim();
-    if (!newName) return;
-
-    chrome.storage.local.set({ profileName: newName }, () => {
-      btnSave.textContent = "Saved!";
-      setTimeout(() => { btnSave.textContent = "Save"; }, 1200);
-      chrome.runtime.sendMessage({ action: "SET_PROFILE_NAME", profileName: newName }, () => {
-        updateState();
-      });
-    });
-  });
-
-  // Refresh
-  btnRefresh.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "SCAN_FLOW_TABS" }, () => {
-      updateState();
-    });
-  });
-
-  // Initial update + timer
-  updateState();
-  setInterval(updateState, 1500);
 });

@@ -2,44 +2,30 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>VEO 3 Bridge</title>
+  <title>Chained Evolution Studio</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="header">
-    <div class="logo">⚡ VEO 3 BRIDGE</div>
+    <div class="logo">⚡ VEO 3 STUDIO</div>
     <div class="subtitle">Chained Evolution Studio</div>
+  </div>
+
+  <div class="action-box">
+    <button id="btnOpenStudio" class="btn-primary-large">
+      <span class="btn-icon">🚀</span>
+      <span>OPEN STUDIO DASHBOARD</span>
+    </button>
+    <div class="action-subgroup">
+      <button id="btnOpenSidePanel" class="btn-secondary-sm">📋 Open as Side Panel</button>
+      <button id="btnOpenFlow" class="btn-secondary-sm">🌐 Open Google Flow</button>
+    </div>
   </div>
 
   <div class="card">
     <div class="row">
-      <span class="label">Profile:</span>
-      <div class="profile-input-group">
-        <input type="text" id="profileName" placeholder="e.g. YOUTUBE, MUZAMIL" spellcheck="false" />
-        <button id="btnSaveProfile" title="Save profile name">Save</button>
-      </div>
-    </div>
-
-    <div class="row">
-      <span class="label">Extension ID:</span>
-      <span class="val" id="instanceId">--</span>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="row">
-      <span class="label">Extension:</span>
-      <span class="val green" id="extStatus">CONNECTED ✓</span>
-    </div>
-
-    <div class="row">
-      <span class="label">Desktop App:</span>
-      <span class="val" id="appStatus">CHECKING...</span>
-    </div>
-
-    <div class="row">
       <span class="label">Flow Tab:</span>
-      <span class="val" id="flowStatus">NOT DETECTED</span>
+      <span class="val" id="flowStatus">CHECKING...</span>
     </div>
 
     <div class="row">
@@ -53,13 +39,13 @@
     </div>
 
     <div class="row">
-      <span class="label">Status:</span>
-      <span class="val bold" id="operationalStatus">IDLE</span>
+      <span class="label">Profile:</span>
+      <span class="val bold" id="profileName">Default</span>
     </div>
   </div>
 
   <div class="footer">
-    <button id="btnRefresh">🔄 Refresh Flow Status</button>
+    <button id="btnRefresh" class="btn-link">🔄 Refresh Connection</button>
   </div>
 
   <script src="popup.js"></script>

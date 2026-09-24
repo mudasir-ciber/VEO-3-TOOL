@@ -1,5 +1,5 @@
-// Content Script for Google Flow page automation and monitoring
-// Communicates with background service worker to automate the Flow web interface
+// Content Script for Google Flow page automation
+// Runs directly inside https://flow.google.com/*
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const action = request.action;
@@ -53,8 +53,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
 });
 
+// Robust DOM search helpers (no non-standard CSS selectors)
+function findButtonByText(text, container = document) {
+  const buttons = container.querySelectorAll("button, [role='button'], div[role='button']");
+  for (const b of buttons) {
+    if (b.innerText && b.innerText.toLowerCase().includes(text.toLowerCase())) {
+      if (window.getComputedStyle(b).display !== "none") {
+        return b;
+      }
+    }
+  }
+  return null;
+}
+
+function findButtonWithIcon(iconText, container = document) {
+  const icons = container.querySelectorAll("mat-icon, .material-icons, span, i");
+  for (const icon of icons) {
+    if (icon.innerText && icon.innerText.toLowerCase().includes(iconText.toLowerCase())) {
+      const btn = icon.closest("button, [role='button'], a");
+      if (btn && window.getComputedStyle(btn).display !== "none") {
+        return btn;
+      }
+    }
+  }
+  return null;
+}
+
 function checkFlowReady() {
-  const promptBox = document.querySelector(".prompt-box-container");
+  const promptBox = document.querySelector(".prompt-box-container") || document.querySelector("textarea") || document.querySelector("[contenteditable='true']");
   const loadingPage = document.querySelector("flow-loading-page");
   const isLoading = loadingPage && window.getComputedStyle(loadingPage).display !== "none" && window.getComputedStyle(loadingPage).opacity !== "0";
 
@@ -63,20 +89,19 @@ function checkFlowReady() {
   }
 
   const header = document.querySelector("flow-tile-view-header");
-  const content = document.querySelector(".aisandbox-content");
-  return Boolean(header && content && !isLoading);
+  const content = document.querySelector(".aisandbox-content") || document.querySelector("main");
+  return Boolean((header || content) && !isLoading);
 }
 
 function checkAuthenticated() {
-  const signInBtn = document.querySelector('button:has-text("Sign in"), a[href*="accounts.google.com"]');
+  const signInBtn = findButtonByText("Sign in");
   if (signInBtn) return false;
 
-  const accountMeta = document.querySelector('meta[name="og-profile-acct"]');
-  const userPic = document.querySelector('img[src*="googleusercontent.com"]');
-  return Boolean(accountMeta || userPic || window.location.href.includes("flow.google.com"));
+  const userPic = document.querySelector("img[src*='googleusercontent.com']") || document.querySelector("header img");
+  return Boolean(userPic || window.location.href.includes("flow.google.com"));
 }
 
-// Convert base64 dataURI to File object
+// Convert base64 dataURI to genuine File object
 function dataURItoFile(dataURI, filename) {
   const arr = dataURI.split(',');
   const mime = arr[0].match(/:(.*?);/)[1] || 'image/png';
@@ -98,50 +123,46 @@ async function handleUploadReference(payload) {
   const dt = new DataTransfer();
   dt.items.add(file);
 
-  // 1. Check for visible or hidden file input
-  let fileInput = document.querySelector('input[type="file"]');
+  // 1. Try finding existing file input
+  let fileInput = document.querySelector("input[type='file']");
   if (!fileInput) {
-    // Try finding reference upload buttons to click and reveal file input
-    const uploadSelectors = [
-      '.prompt-box-container button:has(mat-icon:has-text("add"))',
-      '.prompt-box-container button:has(mat-icon:has-text("image"))',
-      '.prompt-box-container button.flow-icon-button-primary',
-      'button[aria-label*="reference" i]',
-      'button[aria-label*="add image" i]',
-      'button[aria-label*="first frame" i]',
-      'button:has-text("Add Reference")',
-      'button:has-text("Upload Image")'
-    ];
-    for (const sel of uploadSelectors) {
-      try {
-        const btn = document.querySelector(sel);
-        if (btn) {
-          btn.click();
-          await new Promise(r => setTimeout(r, 400));
-          fileInput = document.querySelector('input[type="file"]');
-          if (fileInput) break;
-        }
-      } catch (e) {}
+    // Look for add / reference image button
+    const uploadBtn = findButtonWithIcon("add") ||
+                      findButtonWithIcon("image") ||
+                      findButtonByText("Add Reference") ||
+                      findButtonByText("Upload Image") ||
+                      document.querySelector("button[aria-label*='reference' i]") ||
+                      document.querySelector("button[aria-label*='image' i]");
+
+    if (uploadBtn) {
+      uploadBtn.click();
+      await new Promise(r => setTimeout(r, 400));
+      fileInput = document.querySelector("input[type='file']");
     }
   }
 
   if (fileInput) {
     fileInput.files = dt.files;
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 1000));
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise(r => setTimeout(r, 800));
     return { success: true, message: `Reference image '${filename}' uploaded via input.` };
   }
 
-  // 2. Try drag & drop on prompt-box-container or dropzone
-  const dropTarget = document.querySelector('.prompt-box-container') || document.querySelector('.drop-images-overlay') || document.body;
+  // 2. Drag & Drop onto dropzone or prompt container
+  const dropTarget = document.querySelector(".prompt-box-container") ||
+                     document.querySelector(".drop-images-overlay") ||
+                     document.querySelector("textarea")?.parentElement ||
+                     document.body;
+
   if (dropTarget) {
-    const dragEvent = new DragEvent('drop', {
-      bubbles: true,
-      cancelable: true,
-      dataTransfer: dt
-    });
-    dropTarget.dispatchEvent(dragEvent);
+    const dragEnter = new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt });
+    const dragOver = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt });
+    const dropEvent = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt });
+
+    dropTarget.dispatchEvent(dragEnter);
+    dropTarget.dispatchEvent(dragOver);
+    dropTarget.dispatchEvent(dropEvent);
     await new Promise(r => setTimeout(r, 1000));
     return { success: true, message: `Reference image '${filename}' dropped on container.` };
   }
@@ -157,15 +178,15 @@ async function handleSubmitPrompt(payload) {
   }
 
   const inputSelectors = [
-    '.prompt-box-container textarea',
-    '.prompt-box-container [contenteditable="true"]',
-    '.prompt-box-container div[role="textbox"]',
-    'textarea[placeholder*="prompt" i]',
-    'textarea[placeholder*="Describe" i]',
-    'textarea[aria-label*="prompt" i]',
-    'div[contenteditable="true"][role="textbox"]',
-    'textarea',
-    'input[type="text"][placeholder*="prompt" i]'
+    ".prompt-box-container textarea",
+    ".prompt-box-container [contenteditable='true']",
+    ".prompt-box-container div[role='textbox']",
+    "textarea[placeholder*='prompt' i]",
+    "textarea[placeholder*='Describe' i]",
+    "textarea[aria-label*='prompt' i]",
+    "div[contenteditable='true'][role='textbox']",
+    "textarea",
+    "input[type='text'][placeholder*='prompt' i]"
   ];
 
   let targetField = null;
@@ -185,51 +206,48 @@ async function handleSubmitPrompt(payload) {
 
   if (targetField.tagName.toLowerCase() === "textarea" || targetField.tagName.toLowerCase() === "input") {
     targetField.value = promptText;
-    targetField.dispatchEvent(new Event('input', { bubbles: true }));
-    targetField.dispatchEvent(new Event('change', { bubbles: true }));
+    targetField.dispatchEvent(new Event("input", { bubbles: true }));
+    targetField.dispatchEvent(new Event("change", { bubbles: true }));
   } else {
-    // Contenteditable div
     targetField.innerText = promptText;
-    targetField.dispatchEvent(new Event('input', { bubbles: true }));
+    targetField.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  await new Promise(r => setTimeout(r, 500));
+  await new Promise(r => setTimeout(r, 400));
   return { success: true, message: "Prompt submitted to input field." };
 }
 
-// Trigger generation by clicking Generate button
+// Trigger generation
 async function handleTriggerGeneration() {
   const buttonSelectors = [
-    '.prompt-box-container button.flow-button-primary',
-    '.prompt-box-container button.flow-icon-button-primary',
-    '.prompt-box-container button:has-text("Generate")',
-    '.prompt-box-container button[type="submit"]',
-    'button.flow-button-primary',
-    'button:has-text("Generate")',
-    'button:has-text("Create")',
-    'button:has-text("Render")',
-    'button[aria-label*="Generate" i]',
-    'button[aria-label*="Create video" i]',
-    'button[type="submit"]'
+    ".prompt-box-container button.flow-button-primary",
+    ".prompt-box-container button.flow-icon-button-primary",
+    ".prompt-box-container button[type='submit']",
+    "button.flow-button-primary",
+    "button[aria-label*='Generate' i]",
+    "button[aria-label*='Create' i]",
+    "button[type='submit']"
   ];
 
   let genBtn = null;
   for (const sel of buttonSelectors) {
-    try {
-      const elem = document.querySelector(sel);
-      if (elem && !elem.disabled && window.getComputedStyle(elem).display !== "none") {
-        genBtn = elem;
-        break;
-      }
-    } catch (e) {}
+    const elem = document.querySelector(sel);
+    if (elem && !elem.disabled && window.getComputedStyle(elem).display !== "none") {
+      genBtn = elem;
+      break;
+    }
   }
 
   if (!genBtn) {
-    return { success: false, error: "Generate button not found or currently disabled." };
+    genBtn = findButtonByText("Generate") || findButtonByText("Create") || findButtonByText("Render");
+  }
+
+  if (!genBtn) {
+    return { success: false, error: "Generate button not found or disabled." };
   }
 
   genBtn.click();
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 1200));
   return { success: true, message: "Generate button clicked." };
 }
 
@@ -237,11 +255,11 @@ async function handleTriggerGeneration() {
 async function handleCheckStatus() {
   // Check for error banners
   const errorSelectors = [
-    '.error-tile',
-    '.banner.error',
-    '.banner.warning',
-    'div[role="alert"]',
-    '.flow-snackbar-panel'
+    ".error-tile",
+    ".banner.error",
+    ".banner.warning",
+    "div[role='alert']",
+    ".flow-snackbar-panel"
   ];
 
   for (const sel of errorSelectors) {
@@ -256,11 +274,11 @@ async function handleCheckStatus() {
 
   // Check progress indicators
   const progressSelectors = [
-    'flow-loading-page',
-    '.loading-page-fade-in',
-    '[role="progressbar"]',
-    '.generating-spinner',
-    'svg[aria-label*="loading" i]'
+    "flow-loading-page",
+    ".loading-page-fade-in",
+    "[role='progressbar']",
+    ".generating-spinner",
+    "svg[aria-label*='loading' i]"
   ];
 
   for (const sel of progressSelectors) {
@@ -270,32 +288,17 @@ async function handleCheckStatus() {
     }
   }
 
-  // Check for completed video or download button
-  const downloadSelectors = [
-    'button.flow-icon-button-transparent:has(mat-icon:has-text("download"))',
-    'button:has(mat-icon:has-text("download"))',
-    '.batch-tiles-section button:has(mat-icon:has-text("download"))',
-    '.tiles-container button:has(mat-icon:has-text("download"))',
-    'button[aria-label*="Download" i]',
-    'a[aria-label*="Download" i]',
-    'button:has-text("Download")',
-    'a[download]'
-  ];
+  // Check for download button or completed video
+  const downloadBtn = findButtonWithIcon("download") ||
+                      findButtonByText("Download") ||
+                      document.querySelector("button[aria-label*='Download' i]") ||
+                      document.querySelector("a[download]");
 
-  for (const sel of downloadSelectors) {
-    try {
-      const dBtn = document.querySelector(sel);
-      if (dBtn && window.getComputedStyle(dBtn).display !== "none") {
-        const videoElem = document.querySelector('video[src], .batch-tiles-section video, .tiles-container video');
-        const videoSrc = videoElem ? (videoElem.currentSrc || videoElem.src) : "";
-        return { status: "COMPLETED", videoUrl: videoSrc };
-      }
-    } catch (e) {}
-  }
+  const videoElem = document.querySelector("video[src], .batch-tiles-section video, .tiles-container video, flow-video-player video");
 
-  const videoElem = document.querySelector('video[src], .batch-tiles-section video, .tiles-container video');
-  if (videoElem && (videoElem.currentSrc || videoElem.src)) {
-    return { status: "COMPLETED", videoUrl: videoElem.currentSrc || videoElem.src };
+  if (downloadBtn || videoElem) {
+    const videoSrc = videoElem ? (videoElem.currentSrc || videoElem.src) : "";
+    return { status: "COMPLETED", videoUrl: videoSrc };
   }
 
   return { status: "IDLE" };
@@ -303,7 +306,7 @@ async function handleCheckStatus() {
 
 // Get video URL
 async function handleGetVideoUrl() {
-  const videoElem = document.querySelector('video[src], .batch-tiles-section video, .tiles-container video, flow-video-player video');
+  const videoElem = document.querySelector("video[src], .batch-tiles-section video, .tiles-container video, flow-video-player video");
   if (videoElem && (videoElem.currentSrc || videoElem.src)) {
     return { success: true, url: videoElem.currentSrc || videoElem.src };
   }

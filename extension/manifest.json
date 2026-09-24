@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Chained Evolution Studio Bridge",
-  "version": "1.0.0",
-  "description": "VEO 3 Multi-Profile Bridge connecting Google Flow to Chained Evolution Studio.",
+  "name": "Chained Evolution Studio (VEO 3)",
+  "version": "3.0.0",
+  "description": "Complete in-browser automation studio for Google Flow continuous video generation chains.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuWVgcFzH8KzKVNDCYSwdbH2ZP4w++SuQZYIYvrUSsTHPUw3kBOfMqmzuqG2fGv7U3QWcHSkNm9Rc01KxU/TonF1CDChi+bhjyjSL6MZsjePCEUED/dmZtKgiH8WT0KEW68RSMbvXmCrp+x3+PuK1y6mSx6TbGcw1LpbHntz/JuWGYtkE0juX0dPnWuxd2VT7KQtgMHqf0pUqzw3VC2oGtP7/I94J4gxfpVORrMwAMW3WLR3OudEprQYP44BHnf46jPlQwsVyP5K4bOOSd+eOp48PAlbldTD63F2wRgHLWLqDTIfduvXA2iXRvcJgL0qBiQNReiUkYXnUh924UypwGwIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
@@ -16,17 +16,23 @@
       "48": "icons/icon-48.png"
     }
   },
+  "options_page": "studio.html",
+  "side_panel": {
+    "default_path": "studio.html"
+  },
   "permissions": [
     "tabs",
     "storage",
     "scripting",
-    "alarms",
-    "nativeMessaging"
+    "downloads",
+    "sidePanel",
+    "alarms"
   ],
   "host_permissions": [
     "https://flow.google.com/*",
     "https://labs.google/*",
-    "http://127.0.0.1/*"
+    "https://*.google.com/*",
+    "https://*.googleusercontent.com/*"
   ],
   "background": {
     "service_worker": "background.js"

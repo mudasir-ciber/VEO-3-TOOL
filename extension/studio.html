@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chained Evolution Studio — VEO 3</title>
+  <link rel="stylesheet" href="studio.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-box">
+          <img src="icons/icon-48.png" alt="VEO 3" class="logo-img">
+          <div>
+            <div class="logo-title">CHAINED EVOLUTION</div>
+            <div class="logo-subtitle">STUDIO • VEO 3</div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" id="nav-studio">
+          <span class="nav-icon">⚡</span>
+          <span>Studio</span>
+        </button>
+        <button class="nav-item" id="nav-projects">
+          <span class="nav-icon">📁</span>
+          <span>Projects</span>
+        </button>
+        <button class="nav-item" id="nav-settings">
+          <span class="nav-icon">⚙️</span>
+          <span>Settings</span>
+        </button>
+        <button class="nav-item" id="nav-help">
+          <span class="nav-icon">❓</span>
+          <span>Help &amp; Guide</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="flow-status-card">
+          <div class="status-header">
+            <span class="status-dot-pulse" id="sidebar-status-dot"></span>
+            <span class="status-title" id="sidebar-status-title">CHECKING FLOW...</span>
+          </div>
+          <div class="status-desc" id="sidebar-status-desc">Looking for Google Flow tab</div>
+          <button class="btn btn-secondary btn-sm" id="btn-open-flow-tab">Open Flow Tab</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="main-content">
+      <!-- TOP HEADER BAR -->
+      <header class="top-bar">
+        <div class="project-headline">
+          <span class="project-tag">PROJECT</span>
+          <input type="text" id="project-name-input" class="project-name-input" value="Airplane Evolution" placeholder="Enter Project Name...">
+        </div>
+
+        <div class="top-bar-stats">
+          <div class="stat-badge" id="flow-project-badge">
+            <span class="badge-label">FLOW PROJECT:</span>
+            <span class="badge-value link" id="flow-project-id-display">aa6e6e2c-c62d...</span>
+          </div>
+          <div class="stat-badge" id="chain-status-badge">
+            <span class="badge-label">CHAIN STATUS:</span>
+            <span class="badge-value status-idle" id="chain-status-text">IDLE</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- TWO COLUMN WORKSPACE -->
+      <div class="workspace-grid">
+        <!-- LEFT COLUMN: Inputs & Controls -->
+        <div class="col-left">
+          <!-- CARD: MASTER IMAGE -->
+          <section class="card card-master-image">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="title-icon">🖼️</span>
+                <span>Master Image (Scene 1 Initial Reference)</span>
+              </div>
+              <span class="card-hint">PNG / JPG</span>
+            </div>
+            <div class="card-body">
+              <div class="dropzone" id="master-dropzone">
+                <input type="file" id="master-file-input" accept="image/*" class="file-input-hidden">
+                <div class="dropzone-empty" id="dropzone-empty-state">
+                  <div class="dropzone-icon">📁</div>
+                  <div class="dropzone-text">Drag &amp; drop Master Image here or <strong>browse</strong></div>
+                  <div class="dropzone-sub">This image seeds Scene 1. Subsequent scenes evolve from previous video frames.</div>
+                </div>
+                <div class="dropzone-preview hidden" id="dropzone-preview-state">
+                  <img src="" alt="Master Preview" id="master-preview-img" class="master-thumb">
+                  <div class="preview-meta">
+                    <div class="preview-filename" id="master-filename">master.png</div>
+                    <div class="preview-filesize" id="master-filesize">0 KB</div>
+                    <button class="btn btn-outline-danger btn-xs" id="btn-remove-master">Remove Image</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- CARD: PROMPT BATCH EDITOR -->
+          <section class="card card-prompts">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="title-icon">✍️</span>
+                <span>Scene Prompts &amp; Sequential Batch</span>
+              </div>
+              <div class="header-actions">
+                <button class="btn btn-ghost btn-xs" id="btn-load-sample">Load Sample</button>
+                <button class="btn btn-ghost btn-xs" id="btn-clear-prompts">Clear</button>
+                <span class="badge-count" id="scene-counter-badge">0 Scenes</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <textarea id="prompt-batch-textarea" class="prompt-textarea" placeholder="Paste your continuous prompts here...
+Example:
+SCENE 1: Vintage Wright brothers glider taking off from sandy dune.
+SCENE 2: 1930s twin-engine passenger monoplane flying through clouds.
+SCENE 3: Modern supersonic stealth jet soaring into the upper atmosphere."></textarea>
+
+              <div class="execution-actions">
+                <button class="btn btn-primary btn-run" id="btn-run-chain">
+                  <span class="btn-icon">🚀</span>
+                  <span>RUN CONTINUOUS CHAIN</span>
+                </button>
+                <div class="btn-group">
+                  <button class="btn btn-warning" id="btn-pause-chain" disabled>⏸️ Pause</button>
+                  <button class="btn btn-danger" id="btn-stop-chain" disabled>⏹️ Stop</button>
+                  <button class="btn btn-secondary" id="btn-retry-scene" disabled>🔄 Retry Scene</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- RIGHT COLUMN: Pipeline & Visual Monitor -->
+        <div class="col-right">
+          <!-- CARD: GOOGLE FLOW STATUS -->
+          <section class="card card-flow-target">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="title-icon">🌐</span>
+                <span>Google Flow Connection Monitor</span>
+              </div>
+              <span class="status-pill status-connecting" id="flow-pill">Detecting...</span>
+            </div>
+            <div class="card-body">
+              <div class="flow-connection-row">
+                <div class="flow-info-col">
+                  <div class="flow-label">Target Flow URL:</div>
+                  <div class="flow-url-input-wrap">
+                    <input type="text" id="target-flow-url" class="flow-url-input" value="https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4">
+                    <button class="btn btn-secondary btn-xs" id="btn-save-flow-url">Save</button>
+                  </div>
+                </div>
+                <div class="flow-action-col">
+                  <button class="btn btn-accent btn-sm" id="btn-focus-flow">Focus Flow Tab</button>
+                </div>
+              </div>
+              <div class="flow-banner hidden" id="flow-banner">
+                <span class="banner-icon">⚠️</span>
+                <span class="banner-text" id="flow-banner-text">Flow tab not found.</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- CARD: ACTIVE PIPELINE TRACKER -->
+          <section class="card card-pipeline">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="title-icon">⚡</span>
+                <span id="pipeline-title">Active Scene Pipeline: Ready</span>
+              </div>
+              <span class="pipeline-progress-text" id="pipeline-progress-text">0 / 0 Completed</span>
+            </div>
+            <div class="card-body">
+              <!-- Visual Step Indicators -->
+              <div class="pipeline-stepper" id="pipeline-stepper">
+                <div class="step-item" id="step-ref">
+                  <div class="step-circle">1</div>
+                  <div class="step-label">Reference Image</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-prompt">
+                  <div class="step-circle">2</div>
+                  <div class="step-label">Prompt Injected</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-generate">
+                  <div class="step-circle">3</div>
+                  <div class="step-label">Generate</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-wait">
+                  <div class="step-circle">4</div>
+                  <div class="step-label">Wait 100%</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-download">
+                  <div class="step-circle">5</div>
+                  <div class="step-label">Download MP4</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-extract">
+                  <div class="step-circle">6</div>
+                  <div class="step-label">Extract Frame</div>
+                </div>
+                <div class="step-line"></div>
+                <div class="step-item" id="step-chain">
+                  <div class="step-circle">7</div>
+                  <div class="step-label">Chain Next</div>
+                </div>
+              </div>
+
+              <!-- Active Scene Monitor Box -->
+              <div class="active-monitor-box">
+                <div class="monitor-col">
+                  <div class="monitor-caption">Reference In</div>
+                  <div class="monitor-frame" id="monitor-ref-frame">
+                    <img src="" alt="Active Reference" id="monitor-ref-img" class="monitor-img hidden">
+                    <div class="monitor-empty" id="monitor-ref-empty">No reference active</div>
+                  </div>
+                </div>
+
+                <div class="monitor-col">
+                  <div class="monitor-caption">Generated Video Out</div>
+                  <div class="monitor-frame" id="monitor-video-frame">
+                    <video id="monitor-video-player" class="monitor-video hidden" controls autoplay muted loop></video>
+                    <div class="monitor-empty" id="monitor-video-empty">Waiting for video generation</div>
+                  </div>
+                </div>
+
+                <div class="monitor-col">
+                  <div class="monitor-caption">Extracted Last Frame</div>
+                  <div class="monitor-frame" id="monitor-last-frame">
+                    <img src="" alt="Last Frame" id="monitor-frame-img" class="monitor-img hidden">
+                    <div class="monitor-empty" id="monitor-frame-empty">Extracting from MP4...</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- CARD: LIVE ACTIVITY CONSOLE -->
+          <section class="card card-console">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="title-icon">💻</span>
+                <span>Live Activity Console</span>
+              </div>
+              <div class="header-actions">
+                <button class="btn btn-ghost btn-xs" id="btn-clear-console">Clear Console</button>
+              </div>
+            </div>
+            <div class="card-body console-body" id="console-logs">
+              <div class="log-line log-info">
+                <span class="log-time">[00:00:00]</span>
+                <span class="log-msg">Chained Evolution Studio Extension initialized. Ready.</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- BOTTOM SECTION: SCENE CARDS GRID -->
+      <section class="card card-scene-grid">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="title-icon">🎞️</span>
+            <span>Chained Scene Progression &amp; Timeline</span>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-download-all-zip">📦 Download All Assets</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="scene-cards-container" id="scene-cards-container">
+            <!-- Dynamic Scene Cards will render here -->
+            <div class="empty-scenes-msg" id="empty-scenes-msg">
+              Paste prompts above and click <strong>RUN CONTINUOUS CHAIN</strong> to begin video generation.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- SETTINGS MODAL DIALOG -->
+  <dialog id="settings-dialog" class="studio-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3>Settings &amp; Preferences</h3>
+        <button class="btn-dialog-close" id="btn-close-settings">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="setting-item">
+          <label for="setting-flow-url">Default Google Flow Project URL</label>
+          <input type="text" id="setting-flow-url" class="form-input" value="https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4">
+        </div>
+        <div class="setting-item">
+          <label for="setting-max-retries">Max Generation Retries (per scene)</label>
+          <input type="number" id="setting-max-retries" class="form-input" value="3" min="1" max="10">
+        </div>
+        <div class="setting-item">
+          <label for="setting-poll-interval">Polling Interval (seconds)</label>
+          <input type="number" id="setting-poll-interval" class="form-input" value="3" min="1" max="15">
+        </div>
+        <div class="setting-item-check">
+          <input type="checkbox" id="setting-auto-download" checked>
+          <label for="setting-auto-download">Automatically trigger browser download for each completed video &amp; frame</label>
+        </div>
+        <div class="setting-item-check">
+          <input type="checkbox" id="setting-sound-effects" checked>
+          <label for="setting-sound-effects">Play sound effects upon scene completion</label>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-secondary" id="btn-cancel-settings">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- HELP & GUIDE MODAL DIALOG -->
+  <dialog id="help-dialog" class="studio-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3>How Chained Evolution Studio Works</h3>
+        <button class="btn-dialog-close" id="btn-close-help">×</button>
+      </div>
+      <div class="dialog-body guide-body">
+        <h4>🔒 The Ironclad Chain Rule:</h4>
+        <p>1. <strong>Scene 1</strong> uses your <strong>Master Image</strong> as the initial visual reference.</p>
+        <p>2. The extension submits Scene 1's prompt to Google Flow and waits until video generation completes 100%.</p>
+        <p>3. The extension retrieves the generated MP4 and extracts the <strong>exact last frame</strong> as a crisp PNG image.</p>
+        <p>4. <strong>Scene 2</strong> automatically uploads that extracted last frame as its reference. <em>The Master Image is never used for Scene 2 or later!</em></p>
+        <p>5. The cycle repeats continuously across all scenes in your batch.</p>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-primary" id="btn-understand-help">Got it</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="studio.js"></script>
+</body>
+</html>
