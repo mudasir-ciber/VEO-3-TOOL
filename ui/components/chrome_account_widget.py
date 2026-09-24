@@ -260,23 +260,17 @@ class ModeBAutomationDialog(QDialog):
         layout.addLayout(h_btns)
 
     def _on_launch_clicked(self):
-        # Verify if Chrome is still running
+        # Verify if Chrome is still running - NEVER forcefully kill user's Chrome!
         if ChromeProfileManager.is_chrome_running():
-            ret = QMessageBox.question(
+            QMessageBox.information(
                 self,
-                "Close Chrome First",
-                "Chrome is still open on your computer.<br><br>"
-                "Would you like Chained Evolution Studio to gently close Chrome so it can reopen with automation enabled?",
-                QMessageBox.Yes | QMessageBox.No
+                "Chrome Open",
+                "Chrome is currently open with your tabs and files.<br><br>"
+                "To protect your open work, Chained Evolution Studio will <b>never</b> forcefully close your tabs.<br><br>"
+                "• <b>Recommended:</b> Use the <b>Chrome Extension</b> (keeps all your tabs open with zero restarts!)<br>"
+                "• Or manually save and close Chrome, then click Launch."
             )
-            if ret == QMessageBox.Yes:
-                try:
-                    subprocess.run(["taskkill", "/F", "/IM", "chrome.exe", "/T"], capture_output=True)
-                    time.sleep(1.5)
-                except Exception as e:
-                    logger.error(f"Error terminating Chrome: {e}")
-            else:
-                return
+            return
 
         self.sig_launch_requested.emit()
         self.accept()
@@ -799,7 +793,26 @@ class ChromeAccountWidget(QFrame):
 
         logger.info(f"Connecting to Google Flow project ({proj_url}) for profile: {prof_name}...")
 
-        # 1. Try CDP session
+        # 1. Check Extension Bridge (preferred zero-restart connection)
+        bridge = ExtensionBridgeServer.get_instance()
+        if bridge.is_profile_connected(prof_name):
+            logger.info(f"Extension bridge active for profile '{prof_name}'. Opening project...")
+            self.connector.initialize(chrome_profile=self.current_profile)
+            nav_ok, nav_msg = self.connector.navigate_to_exact_project(proj_url)
+            ver_ok, ver_msg = self.connector.verify_exact_project(proj_url, timeout_sec=15.0)
+            self._update_system_status()
+            if ver_ok or nav_ok:
+                QMessageBox.information(
+                    self,
+                    "Connected via Extension",
+                    f"✓ Google Flow project opened via Chrome Extension!\n\n"
+                    f"Profile: {prof_name}\n"
+                    f"Project: {proj_url}\n"
+                    f"Status: Ready"
+                )
+                return
+
+        # 2. Try CDP session
         ok, status, tabs = self.connector.connect_to_existing_chrome(port=9222)
         if ok and (status == "CONNECTED_TO_FLOW" or status == "MULTIPLE_FLOW_TABS"):
             if status == "MULTIPLE_FLOW_TABS":
@@ -829,24 +842,6 @@ class ChromeAccountWidget(QFrame):
                     f"Google Flow tab navigated, but still loading or requires attention:\n{ver_msg}"
                 )
             return
-
-        # 2. Check Extension Bridge
-        bridge = ExtensionBridgeServer.get_instance()
-        if bridge.is_profile_connected(prof_name):
-            logger.info(f"Extension bridge active for profile '{prof_name}'. Opening project...")
-            nav_ok, nav_msg = self.connector.navigate_to_exact_project(proj_url)
-            ver_ok, ver_msg = self.connector.verify_exact_project(proj_url, timeout_sec=15.0)
-            self._update_system_status()
-            if ver_ok or nav_ok:
-                QMessageBox.information(
-                    self,
-                    "Connected via Extension",
-                    f"✓ Google Flow project opened via Chrome Extension!\n\n"
-                    f"Profile: {prof_name}\n"
-                    f"Project: {proj_url}\n"
-                    f"Status: Ready"
-                )
-                return
 
         # 3. Chrome running without CDP or Extension
         if status == "CHROME_RUNNING_WITHOUT_CDP":

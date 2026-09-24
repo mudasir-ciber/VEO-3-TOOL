@@ -18,12 +18,16 @@
   "permissions": [
     "tabs",
     "storage",
-    "scripting"
+    "scripting",
+    "alarms",
+    "downloads"
   ],
   "host_permissions": [
     "https://flow.google.com/*",
     "https://labs.google/*",
-    "http://127.0.0.1:18999/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

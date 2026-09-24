@@ -1,11 +1,17 @@
 """Local HTTP bridge server enabling real-time communication between Chained Evolution Studio and the Chrome extension."""
-import json
+import os
+import sys
 import time
+import base64
+import json
+import urllib.request
 import threading
+from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Any, Optional, Tuple, List
 
 from core.logger import logger
+from core.video_validator import VideoValidator
 
 
 class ExtensionBridgeServer:
@@ -21,8 +27,8 @@ class ExtensionBridgeServer:
         # State storage
         self.connected_profiles: Dict[str, float] = {}  # profileName -> last_seen_timestamp
         self.pending_commands: Dict[str, List[Dict[str, Any]]] = {}  # profileName -> list of cmd dicts
-        self.latest_reports: Dict[str, Dict[str, Any]] = {}  # profileName -> latest report dict
-        self._report_events: Dict[str, threading.Event] = {}  # profileName -> Event
+        self.latest_reports: Dict[str, Dict[str, Any]] = {}  # key -> latest report dict
+        self._report_events: Dict[str, threading.Event] = {}  # key -> Event
 
     @classmethod
     def get_instance(cls) -> 'ExtensionBridgeServer':
@@ -85,6 +91,12 @@ class ExtensionBridgeServer:
                         response_data = bridge.pending_commands[profile].pop(0)
                     elif "*" in bridge.pending_commands and bridge.pending_commands["*"]:
                         response_data = bridge.pending_commands["*"].pop(0)
+                    else:
+                        # Fallback: if any command is queued for any profile, dispatch to active client
+                        for k in list(bridge.pending_commands.keys()):
+                            if bridge.pending_commands[k]:
+                                response_data = bridge.pending_commands[k].pop(0)
+                                break
 
                     self.send_response(200)
                     self._send_cors_headers()
@@ -94,14 +106,18 @@ class ExtensionBridgeServer:
 
                 elif self.path == "/report":
                     profile = payload.get("profileName", "Default").strip()
+                    cmd_name = payload.get("command", "")
                     bridge.connected_profiles[profile] = time.time()
-                    bridge.latest_reports[profile] = payload
 
-                    # Notify waiting threads
-                    if profile in bridge._report_events:
-                        bridge._report_events[profile].set()
-                    if "*" in bridge._report_events:
-                        bridge._report_events["*"].set()
+                    bridge.latest_reports[profile] = payload
+                    bridge.latest_reports["*"] = payload
+                    if cmd_name:
+                        bridge.latest_reports[f"{profile}_{cmd_name}"] = payload
+                        bridge.latest_reports[f"*_{cmd_name}"] = payload
+
+                    # Notify all waiting threads
+                    for evt in list(bridge._report_events.values()):
+                        evt.set()
 
                     self.send_response(200)
                     self._send_cors_headers()
@@ -121,16 +137,30 @@ class ExtensionBridgeServer:
         except Exception as e:
             logger.warning(f"Could not start Extension Bridge server: {e}")
 
-    def is_profile_connected(self, profile_name: str, max_age_sec: float = 6.0) -> bool:
-        """Check if heartbeat was received from Chrome extension within max_age_sec."""
-        p_norm = profile_name.strip()
+    def is_profile_connected(self, profile_name: str = "", max_age_sec: float = 10.0) -> bool:
+        """
+        Check if heartbeat was received from Chrome extension within max_age_sec.
+        If ANY extension client is currently polling on 127.0.0.1, it returns True.
+        """
         now = time.time()
-        for prof, last_seen in list(self.connected_profiles.items()):
-            if (prof.lower() == p_norm.lower() or p_norm.lower() in prof.lower()) and (now - last_seen < max_age_sec):
-                return True
-        return False
+        active = [prof for prof, last_seen in self.connected_profiles.items() if (now - last_seen < max_age_sec)]
+        if not active:
+            return False
 
-    def get_connected_profiles(self, max_age_sec: float = 6.0) -> List[str]:
+        # If specific profile requested, check match or fallback to any active extension
+        p_norm = profile_name.strip().lower()
+        if not p_norm:
+            return True
+
+        for prof in active:
+            p_curr = prof.lower()
+            if p_curr == p_norm or p_norm in p_curr or p_curr in p_norm or p_curr == "default":
+                return True
+
+        # Any active extension is connected
+        return len(active) > 0
+
+    def get_connected_profiles(self, max_age_sec: float = 10.0) -> List[str]:
         """Return list of active Chrome profiles currently communicating via extension."""
         now = time.time()
         return [
@@ -143,10 +173,10 @@ class ExtensionBridgeServer:
         profile_name: str,
         command_name: str,
         params: Optional[Dict[str, Any]] = None,
-        wait_timeout_sec: float = 12.0
+        wait_timeout_sec: float = 15.0
     ) -> Tuple[bool, Dict[str, Any]]:
-        """Queue a command for the extension and optionally wait for its response."""
-        p_key = profile_name.strip()
+        """Queue a command for the extension and wait for its response."""
+        p_key = profile_name.strip() or "Default"
         cmd_dict = {
             "command": command_name,
             "targetProfile": p_key,
@@ -157,19 +187,28 @@ class ExtensionBridgeServer:
             self.pending_commands[p_key] = []
         self.pending_commands[p_key].append(cmd_dict)
 
-        # Setup event
+        # Event for this command
+        evt_key = f"{p_key}_{command_name}"
         evt = threading.Event()
-        self._report_events[p_key] = evt
+        self._report_events[evt_key] = evt
 
-        # Wait for reply
+        # Clear prior stale report
+        self.latest_reports.pop(evt_key, None)
+        self.latest_reports.pop(f"*_{command_name}", None)
+
         if wait_timeout_sec > 0:
             got_signal = evt.wait(timeout=wait_timeout_sec)
-            self._report_events.pop(p_key, None)
+            self._report_events.pop(evt_key, None)
             if got_signal:
-                report = self.latest_reports.get(p_key, {})
+                report = (
+                    self.latest_reports.get(evt_key) or
+                    self.latest_reports.get(f"*_{command_name}") or
+                    self.latest_reports.get(p_key) or
+                    self.latest_reports.get("*", {})
+                )
                 return True, report
             else:
-                return False, {"error": "Timeout waiting for extension response"}
+                return False, {"error": f"Timeout ({wait_timeout_sec}s) waiting for extension response to {command_name}"}
 
         return True, {"queued": True}
 
@@ -194,6 +233,116 @@ class ExtensionBridgeServer:
             wait_timeout_sec=timeout_sec
         )
         return ok, res
+
+    def upload_reference(self, profile_name: str, image_path: Path, timeout_sec: float = 20.0) -> Tuple[bool, str]:
+        """Upload reference image into Flow interface via extension."""
+        img = Path(image_path).resolve()
+        if not img.is_file():
+            return False, f"Reference image file not found: {img}"
+
+        with open(img, "rb") as f:
+            b64_data = base64.b64encode(f.read()).decode("utf-8")
+        data_uri = f"data:image/png;base64,{b64_data}"
+
+        ok, res = self.send_command(
+            profile_name=profile_name,
+            command_name="UPLOAD_REFERENCE",
+            params={"base64Data": data_uri, "filename": img.name},
+            wait_timeout_sec=timeout_sec
+        )
+        if ok and res.get("success"):
+            return True, res.get("message", "Reference image uploaded successfully")
+        return False, res.get("error", "Failed to upload reference image via extension")
+
+    def submit_prompt(self, profile_name: str, prompt_text: str, timeout_sec: float = 15.0) -> Tuple[bool, str]:
+        """Submit prompt text into Flow interface via extension."""
+        ok, res = self.send_command(
+            profile_name=profile_name,
+            command_name="SUBMIT_PROMPT",
+            params={"promptText": prompt_text.strip()},
+            wait_timeout_sec=timeout_sec
+        )
+        if ok and res.get("success"):
+            return True, res.get("message", "Prompt submitted successfully")
+        return False, res.get("error", "Failed to submit prompt via extension")
+
+    def trigger_generation(self, profile_name: str, timeout_sec: float = 15.0) -> Tuple[bool, str]:
+        """Click Generate button in Flow interface via extension."""
+        ok, res = self.send_command(
+            profile_name=profile_name,
+            command_name="TRIGGER_GENERATION",
+            params={},
+            wait_timeout_sec=timeout_sec
+        )
+        if ok and res.get("success"):
+            return True, res.get("message", "Generation triggered successfully")
+        return False, res.get("error", "Failed to click generate button via extension")
+
+    def wait_for_completion(self, profile_name: str, timeout_sec: float = 600.0) -> Tuple[bool, str]:
+        """Poll extension status until generation completes or errors out."""
+        start_time = time.time()
+        logger.info(f"Waiting for video generation via extension (timeout: {timeout_sec}s)...")
+
+        while time.time() - start_time < timeout_sec:
+            ok, res = self.send_command(
+                profile_name=profile_name,
+                command_name="CHECK_GENERATION_STATUS",
+                params={},
+                wait_timeout_sec=6.0
+            )
+            if ok:
+                status = res.get("status", "")
+                if status == "COMPLETED":
+                    logger.info("Video generation completed via extension!")
+                    return True, "Generation completed"
+                elif status == "ERROR":
+                    err = res.get("error", "Generation error on server")
+                    return False, f"Generation failed: {err}"
+
+            time.sleep(2.5)
+
+        return False, f"Timeout ({timeout_sec}s) reached waiting for video generation via extension."
+
+    def download_video(self, profile_name: str, dest_path: Path, timeout_sec: float = 60.0) -> Tuple[bool, str]:
+        """Download generated video and verify."""
+        dest = Path(dest_path).resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        ok, res = self.send_command(
+            profile_name=profile_name,
+            command_name="DOWNLOAD_VIDEO",
+            params={},
+            wait_timeout_sec=timeout_sec
+        )
+
+        if not ok or not res.get("success"):
+            return False, res.get("error", "Failed to retrieve video stream from extension")
+
+        # 1. Base64 data URI returned
+        data_uri = res.get("videoDataUri", "")
+        if data_uri and "," in data_uri:
+            b64_str = data_uri.split(",", 1)[1]
+            raw_bytes = base64.b64decode(b64_str)
+            with open(dest, "wb") as f:
+                f.write(raw_bytes)
+            v_ok, v_msg = VideoValidator.validate_video_integrity(dest)
+            if v_ok:
+                logger.info(f"Video saved and validated: {dest.name}")
+                return True, "Video downloaded and verified successfully"
+
+        # 2. Remote URL returned
+        vid_url = res.get("url", "")
+        if vid_url and vid_url.startswith("http"):
+            try:
+                urllib.request.urlretrieve(vid_url, str(dest))
+                v_ok, v_msg = VideoValidator.validate_video_integrity(dest)
+                if v_ok:
+                    logger.info(f"Video retrieved from URL and validated: {dest.name}")
+                    return True, "Video downloaded and verified successfully"
+            except Exception as e:
+                return False, f"Failed downloading video stream from URL: {e}"
+
+        return False, "Received video data could not be validated on disk"
 
     def stop(self):
         """Shutdown the bridge server."""

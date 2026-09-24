@@ -202,6 +202,42 @@ class TestChainedEvolutionStudio(unittest.TestCase):
         ok, msg = connector.verify_exact_project("https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4")
         self.assertTrue(ok)
 
+    def test_08_extension_profile_mismatch_fallback(self):
+        """Verify extension bridge handles profile name mismatches smoothly."""
+        import urllib.request
+        import json
+        from core.extension_bridge import ExtensionBridgeServer
+        bridge = ExtensionBridgeServer.get_instance()
+        bridge.start()
+
+        # Simulate client polling with 'Default'
+        poll_req = urllib.request.Request(
+            "http://127.0.0.1:18999/poll",
+            data=json.dumps({"profileName": "Default"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        poll_resp = urllib.request.urlopen(poll_req, timeout=3.0)
+        self.assertEqual(poll_resp.status, 200)
+
+        # Checking any profile name like 'John Snow (John)' must return True
+        self.assertTrue(bridge.is_profile_connected("John Snow (John)"))
+        self.assertTrue(bridge.is_profile_connected("Default"))
+        self.assertTrue(bridge.is_profile_connected(""))
+
+    def test_09_flow_browser_extension_fallback(self):
+        """Verify PlaywrightFlowConnector routes commands to extension bridge when CDP page is None."""
+        from connector.flow_browser import PlaywrightFlowConnector
+        from core.extension_bridge import ExtensionBridgeServer
+        bridge = ExtensionBridgeServer.get_instance()
+        bridge.start()
+
+        # Make sure bridge has active heartbeat
+        bridge.connected_profiles["Default"] = bridge.connected_profiles.get("Default", 0) + 1000
+
+        connector = PlaywrightFlowConnector(cdp_port=9222)
+        # Should report flow ready via extension bridge
+        self.assertTrue(connector.is_flow_tab_ready())
+
 
 if __name__ == "__main__":
     unittest.main()

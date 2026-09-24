@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
                 self.active_connector = chrome_conn
             elif ext_connected:
                 # Extension bridge connected in this profile
+                chrome_conn.initialize(chrome_profile=self.current_chrome_profile)
                 self.active_connector = chrome_conn
                 self.card_chrome._update_system_status()
             else:

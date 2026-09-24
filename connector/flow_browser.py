@@ -29,15 +29,18 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def is_flow_tab_ready(self) -> bool:
         """Check if attached Google Flow tab is alive and responsive."""
-        if not self._page:
-            return False
-        try:
-            if self._page.is_closed():
+        if self._page:
+            try:
+                if self._page.is_closed():
+                    return False
+                url = self._page.url or ""
+                return "flow.google" in url.lower() or "labs.google" in url.lower()
+            except Exception:
                 return False
-            url = self._page.url or ""
-            return "flow.google" in url.lower() or "labs.google" in url.lower()
-        except Exception:
-            return False
+
+        # Fallback to extension bridge
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        return ExtensionBridgeServer.get_instance().is_profile_connected(prof_name)
 
     def connect_to_existing_chrome(
         self,
@@ -176,11 +179,19 @@ class PlaywrightFlowConnector(BaseFlowConnector):
         Never launch a second conflicting Chrome process if profile is already open.
         """
         self.chrome_profile = chrome_profile
+        prof_name = chrome_profile.display_name if chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
 
-        # 1. Already connected to live Flow tab?
+        # 1. Already connected to live Flow tab or Extension Bridge?
         if self.is_connected and self.is_flow_tab_ready():
             logger.info("Using currently attached Google Flow tab.")
             return True, "Browser connected to Google Flow"
+
+        if bridge.is_profile_connected(prof_name):
+            logger.info(f"Connected to existing Chrome session via Chrome Extension Bridge (Profile: {prof_name}).")
+            self.is_connected = True
+            self.is_flow_connected = True
+            return True, "Connected via Chrome Extension"
 
         # 2. Try connecting to existing automation session
         ok, status, tabs = self.connect_to_existing_chrome(port=self.cdp_port)
@@ -193,8 +204,13 @@ class PlaywrightFlowConnector(BaseFlowConnector):
         elif status == "FLOW_TAB_NOT_FOUND":
             return False, "Google Flow tab not found in connected Chrome. Please open Google Flow in this Chrome profile."
 
-        # 3. If Chrome is already running without automation port, DO NOT spawn second Chrome!
+        # 3. If Chrome is already running without automation port, check extension bridge one more time
         if status == "CHROME_RUNNING_WITHOUT_CDP":
+            if bridge.is_profile_connected(prof_name):
+                logger.info(f"Connected via Chrome Extension Bridge in profile: {prof_name}")
+                self.is_connected = True
+                self.is_flow_connected = True
+                return True, "Connected via Chrome Extension"
             return False, (
                 "CHROME_RUNNING_WITHOUT_CDP: The selected Chrome profile is already open, but does not have an automation endpoint. "
                 "Please use 'Connect to Open Chrome' or restart Chrome with automation enabled."
@@ -395,15 +411,19 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def prepare_scene_interface(self) -> Tuple[bool, str]:
         """Ensure the generation UI is ready for new input."""
-        if not self._page:
-            return False, "Browser tab not attached"
-        self._page.wait_for_timeout(1000)
+        if self._page:
+            self._page.wait_for_timeout(1000)
         return True, "Interface ready"
 
     def upload_reference(self, image_path: Path) -> Tuple[bool, str]:
         """Upload Master Image or previous scene's last frame as reference."""
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+
         if not self._page:
-            return False, "Browser tab not attached"
+            if bridge.is_profile_connected(prof_name):
+                return bridge.upload_reference(prof_name, image_path)
+            return False, "Browser tab not attached and Extension bridge not connected"
 
         img = Path(image_path).resolve()
         if not img.is_file():
@@ -437,8 +457,13 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def submit_prompt(self, prompt_text: str) -> Tuple[bool, str]:
         """Paste and verify prompt text in the prompt field."""
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+
         if not self._page:
-            return False, "Browser tab not attached"
+            if bridge.is_profile_connected(prof_name):
+                return bridge.submit_prompt(prof_name, prompt_text)
+            return False, "Browser tab not attached and Extension bridge not connected"
 
         clean_prompt = prompt_text.strip()
         logger.info(f"Entering prompt: {clean_prompt[:50]}...")
@@ -472,8 +497,13 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def trigger_generation(self) -> Tuple[bool, str]:
         """Click the generate button."""
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+
         if not self._page:
-            return False, "Browser tab not attached"
+            if bridge.is_profile_connected(prof_name):
+                return bridge.trigger_generation(prof_name)
+            return False, "Browser tab not attached and Extension bridge not connected"
 
         try:
             gen_btn = None
@@ -495,8 +525,13 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def wait_for_completion(self, timeout_sec: float = 600.0) -> Tuple[bool, str]:
         """Wait for video generation to complete."""
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+
         if not self._page:
-            return False, "Browser tab not attached"
+            if bridge.is_profile_connected(prof_name):
+                return bridge.wait_for_completion(prof_name, timeout_sec=timeout_sec)
+            return False, "Browser tab not attached and Extension bridge not connected"
 
         logger.info(f"Waiting for video generation completion (timeout: {timeout_sec}s)...")
         start_time = time.time()
@@ -551,8 +586,13 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
     def download_video(self, destination_mp4_path: Path, timeout_sec: float = 300.0) -> Tuple[bool, str]:
         """Download the generated video and verify."""
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+
         if not self._page:
-            return False, "Browser tab not attached"
+            if bridge.is_profile_connected(prof_name):
+                return bridge.download_video(prof_name, destination_mp4_path, timeout_sec=timeout_sec)
+            return False, "Browser tab not attached and Extension bridge not connected"
 
         dest = Path(destination_mp4_path).resolve()
         dest.parent.mkdir(parents=True, exist_ok=True)
