@@ -5,7 +5,7 @@ a = Analysis(
     ['E:/VEO 3 TOOL/main.py'],
     pathex=[],
     binaries=[],
-    datas=[('E:/VEO 3 TOOL/ui/styles/dark_theme.qss', 'ui/styles'), ('E:/VEO 3 TOOL/app_icon.ico', '.'), ('E:/VEO 3 TOOL/app_icon.png', '.'), ('E:/VEO 3 TOOL/.venv/Lib/site-packages/playwright/driver', 'playwright/driver'), ('E:/VEO 3 TOOL/.venv/Lib/site-packages/imageio_ffmpeg/binaries', 'imageio_ffmpeg/binaries')],
+    datas=[('E:/VEO 3 TOOL/ui/styles/dark_theme.qss', 'ui/styles'), ('E:/VEO 3 TOOL/app_icon.ico', '.'), ('E:/VEO 3 TOOL/app_icon.png', '.'), ('E:/VEO 3 TOOL/extension', 'extension'), ('E:/VEO 3 TOOL/.venv/Lib/site-packages/playwright/driver', 'playwright/driver'), ('E:/VEO 3 TOOL/.venv/Lib/site-packages/imageio_ffmpeg/binaries', 'imageio_ffmpeg/binaries')],
     hiddenimports=['PySide6', 'playwright', 'imageio_ffmpeg', 'PIL'],
     hookspath=[],
     hooksconfig={},

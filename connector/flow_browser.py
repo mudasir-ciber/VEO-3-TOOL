@@ -5,9 +5,10 @@ import time
 from pathlib import Path
 from typing import Tuple, Optional, Any, List, Dict
 
-from core.config import DEFAULT_BROWSER_PROFILE_DIR, GOOGLE_FLOW_URL
+from core.config import DEFAULT_BROWSER_PROFILE_DIR, GOOGLE_FLOW_URL, get_flow_project_url
 from core.chrome_profile_manager import ChromeProfileManager
 from core.video_validator import VideoValidator
+from core.extension_bridge import ExtensionBridgeServer
 from core.logger import logger
 from connector.flow_base import BaseFlowConnector
 import connector.flow_selectors as selectors
@@ -226,6 +227,124 @@ class PlaywrightFlowConnector(BaseFlowConnector):
                     return True, "Connected to Google Flow tab"
 
         return False, "Could not initialize automation session with Google Flow."
+
+    def navigate_to_exact_project(self, project_url: str) -> Tuple[bool, str]:
+        """Navigate or switch to the exact Google Flow project tab without launching extra Chrome."""
+        clean_url = project_url.strip()
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+
+        # 1. Try CDP session first if connected
+        if self._context and self._context.pages:
+            # Check if any tab already matches project URL or project ID
+            proj_id = clean_url.strip("/").split("/")[-1] if "/" in clean_url else clean_url
+            for p in self._context.pages:
+                try:
+                    p_url = p.url or ""
+                    if (clean_url and clean_url in p_url) or (proj_id and proj_id in p_url):
+                        self._attach_tab({
+                            "index": self._context.pages.index(p),
+                            "title": p.title() or "Google Flow",
+                            "url": p_url,
+                            "page": p
+                        })
+                        p.bring_to_front()
+                        logger.info(f"Switched to existing Google Flow project tab: {p_url}")
+                        return True, "Switched to existing project tab"
+                except Exception:
+                    pass
+
+            # If current page is open, navigate it
+            if self._page and not self._page.is_closed():
+                try:
+                    logger.info(f"Navigating current tab to exact project: {clean_url}")
+                    self._page.goto(clean_url, wait_until="domcontentloaded", timeout=45000)
+                    return True, "Navigated existing tab to Flow project"
+                except Exception as e:
+                    logger.warning(f"Error navigating page via CDP: {e}")
+
+            # Or open new page in same context
+            try:
+                logger.info(f"Opening exact project tab in existing Chrome: {clean_url}")
+                new_page = self._context.new_page()
+                new_page.goto(clean_url, wait_until="domcontentloaded", timeout=45000)
+                self._attach_tab({
+                    "index": len(self._context.pages) - 1,
+                    "title": new_page.title() or "Google Flow",
+                    "url": new_page.url,
+                    "page": new_page
+                })
+                return True, "Opened Flow project in existing Chrome context"
+            except Exception as e:
+                logger.warning(f"Failed to open page in CDP context: {e}")
+
+        # 2. Check Extension Bridge
+        bridge = ExtensionBridgeServer.get_instance()
+        if bridge.is_profile_connected(prof_name):
+            logger.info(f"Using Chrome Extension bridge in profile '{prof_name}' to open Flow project...")
+            ok, msg = bridge.open_flow_project(prof_name, clean_url, timeout_sec=15.0)
+            if ok:
+                return True, msg
+
+        return False, "Could not navigate to Flow project: No active Chrome connection (CDP or Extension)"
+
+    def verify_exact_project(self, project_url: str, timeout_sec: float = 45.0) -> Tuple[bool, str]:
+        """
+        Verify the exact Flow project is fully loaded and ready for automation.
+        State-based detection: waits until flow-loading-page is gone and prompt container is ready.
+        """
+        clean_url = project_url.strip()
+        proj_id = clean_url.strip("/").split("/")[-1] if "/" in clean_url else clean_url
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        start_time = time.time()
+
+        logger.info(f"Verifying project '{proj_id}' readiness (timeout: {timeout_sec}s)...")
+
+        # 1. Verification via CDP if page attached
+        if self._page and not self._page.is_closed():
+            while time.time() - start_time < timeout_sec:
+                try:
+                    curr_url = self._page.url or ""
+                    # Check sign-in redirection
+                    if "accounts.google.com/signin" in curr_url or "accounts.google.com/v3/signin" in curr_url:
+                        return False, "Google Account login required in Chrome."
+
+                    # Check loading page indicator
+                    loading_elem = self._page.query_selector("flow-loading-page")
+                    if loading_elem and loading_elem.is_visible():
+                        time.sleep(0.5)
+                        continue
+
+                    # Check for prompt input or interactive controls
+                    ready = False
+                    for sel in [".prompt-box-container", "flow-tile-view-header", ".aisandbox-content"] + selectors.PROMPT_INPUT_SELECTORS:
+                        elem = self._page.query_selector(sel)
+                        if elem and elem.is_visible():
+                            ready = True
+                            break
+
+                    if ready:
+                        logger.info(f"Google Flow project {proj_id} verified loaded and interactive.")
+                        return True, f"Project {proj_id} loaded and ready"
+
+                except Exception as e:
+                    logger.debug(f"Transient error verifying Flow page: {e}")
+
+                time.sleep(0.5)
+
+            return False, f"Timeout ({timeout_sec}s) waiting for Flow project {proj_id} to load."
+
+        # 2. Verification via Extension Bridge
+        bridge = ExtensionBridgeServer.get_instance()
+        if bridge.is_profile_connected(prof_name):
+            while time.time() - start_time < timeout_sec:
+                ok, res = bridge.verify_flow_project(prof_name, timeout_sec=3.0)
+                if ok and res.get("verified"):
+                    logger.info(f"Google Flow project verified ready via Extension.")
+                    return True, "Project verified ready via extension"
+                time.sleep(1.0)
+            return False, f"Timeout ({timeout_sec}s) waiting for extension to verify project readiness."
+
+        return False, "Neither CDP page nor Extension bridge is available for verification."
 
     def navigate_to_flow(self) -> Tuple[bool, str]:
         """Ensure current tab is on Google Flow."""

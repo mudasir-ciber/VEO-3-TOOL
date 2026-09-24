@@ -20,7 +20,9 @@ class AppLogger:
         self._logger = logging.getLogger("ChainedEvolutionStudio")
         self._logger.setLevel(logging.DEBUG)
         if not self._logger.handlers:
-            ch = logging.StreamHandler(sys.stdout)
+            import io
+            stream = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True) if hasattr(sys.stdout, 'buffer') else sys.stdout
+            ch = logging.StreamHandler(stream)
             ch.setLevel(logging.INFO)
             formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
             ch.setFormatter(formatter)

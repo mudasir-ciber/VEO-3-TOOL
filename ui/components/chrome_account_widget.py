@@ -9,12 +9,14 @@ from typing import Optional, List, Dict, Any
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QLineEdit, QScrollArea, QFrame, QMessageBox,
-    QRadioButton, QButtonGroup, QProgressBar
+    QRadioButton, QButtonGroup, QProgressBar, QApplication
 )
 from PySide6.QtGui import QPixmap, QIcon, QColor, QFont
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 
+from core.config import get_flow_project_url, set_flow_project_url, DEFAULT_FLOW_PROJECT_URL, BASE_DIR
 from core.chrome_profile_manager import ChromeProfileManager, ChromeProfile
+from core.extension_bridge import ExtensionBridgeServer
 from connector.flow_browser import PlaywrightFlowConnector
 from core.logger import logger
 
@@ -399,6 +401,99 @@ class FlowNotFoundDialog(QDialog):
         self.accept()
 
 
+class ChromeExtensionSetupDialog(QDialog):
+    """Dialog guiding user through 10-second setup of the Chrome Bridge Extension."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Google Chrome Extension Setup (Zero Restart)")
+        self.resize(580, 430)
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setStyleSheet("""
+            QDialog { background-color: #0b0f19; color: #f1f5f9; }
+            QLabel { color: #cbd5e1; font-size: 13px; line-height: 1.5; }
+            QLineEdit { background-color: #161c2a; border: 1px solid #2b354d; border-radius: 6px; color: #ffffff; padding: 7px 10px; font-size: 12px; }
+            QPushButton#btnAction { background-color: #2563eb; color: #ffffff; font-weight: 700; padding: 8px 16px; border-radius: 6px; border: none; font-size: 12px; }
+            QPushButton#btnAction:hover { background-color: #1d4ed8; }
+            QPushButton#btnSecondary { background-color: #1e293b; color: #f8fafc; font-weight: 600; padding: 7px 14px; border-radius: 6px; border: 1px solid #334155; }
+            QPushButton#btnSecondary:hover { background-color: #334155; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(14)
+
+        lbl_title = QLabel("🧩 Chrome Extension Setup (Zero-Restart Connection)")
+        lbl_title.setStyleSheet("font-size: 16px; font-weight: 800; color: #f8fafc;")
+        layout.addWidget(lbl_title)
+
+        lbl_intro = QLabel(
+            "The Chained Evolution Studio bridge extension allows connecting directly to your "
+            "open Chrome profile <b>without closing or restarting your browser</b>:"
+        )
+        lbl_intro.setWordWrap(True)
+        layout.addWidget(lbl_intro)
+
+        # Extension Folder path box
+        v_path = QVBoxLayout()
+        v_path.setSpacing(4)
+        lbl_p = QLabel("Extension Folder Location:")
+        lbl_p.setStyleSheet("font-size: 11px; font-weight: 600; color: #94a3b8;")
+        v_path.addWidget(lbl_p)
+
+        h_path = QHBoxLayout()
+        ext_folder = str(BASE_DIR / "extension")
+        self.txt_path = QLineEdit(ext_folder)
+        self.txt_path.setReadOnly(True)
+        h_path.addWidget(self.txt_path)
+
+        btn_copy = QPushButton("📋 Copy Path")
+        btn_copy.setObjectName("btnSecondary")
+        btn_copy.clicked.connect(self._copy_path)
+        h_path.addWidget(btn_copy)
+
+        btn_open_folder = QPushButton("📁 Open Folder")
+        btn_open_folder.setObjectName("btnSecondary")
+        btn_open_folder.clicked.connect(self._open_folder)
+        h_path.addWidget(btn_open_folder)
+        v_path.addLayout(h_path)
+        layout.addLayout(v_path)
+
+        # 4 Step Instructions
+        lbl_steps = QLabel(
+            "<b>Quick Steps (15 Seconds):</b><br>"
+            "1. In your Google Chrome, open <b>chrome://extensions</b> in a new tab.<br>"
+            "2. Turn ON <b>'Developer mode'</b> toggle in the top-right corner.<br>"
+            "3. Click <b>'Load unpacked'</b> button in the top-left, and select the folder above.<br>"
+            "4. The extension connects automatically! You can now control your exact Flow project."
+        )
+        lbl_steps.setWordWrap(True)
+        lbl_steps.setStyleSheet("background-color: #141b2d; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; color: #e2e8f0;")
+        layout.addWidget(lbl_steps)
+
+        layout.addStretch()
+
+        h_bottom = QHBoxLayout()
+        btn_close = QPushButton("Close")
+        btn_close.setObjectName("btnAction")
+        btn_close.clicked.connect(self.accept)
+        h_bottom.addStretch()
+        h_bottom.addWidget(btn_close)
+        layout.addLayout(h_bottom)
+
+    def _copy_path(self):
+        cb = QApplication.clipboard()
+        if cb:
+            cb.setText(self.txt_path.text())
+            QMessageBox.information(self, "Copied", "Extension folder path copied to clipboard!")
+
+    def _open_folder(self):
+        ext_folder = Path(self.txt_path.text())
+        if ext_folder.is_dir() and sys.platform == "win32":
+            os.startfile(str(ext_folder))
+
+
 class ChromeAccountWidget(QFrame):
     sig_profile_changed = Signal(object)  # ChromeProfile
     sig_connection_status_changed = Signal(bool)  # is_flow_connected
@@ -459,13 +554,9 @@ class ChromeAccountWidget(QFrame):
             }
         """)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(16)
-
-        # Left Column: Profile Card & Link Button
-        v_left = QVBoxLayout()
-        v_left.setSpacing(8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
 
         # Header Title with badge 2
         h_title = QHBoxLayout()
@@ -475,155 +566,178 @@ class ChromeAccountWidget(QFrame):
             "border-radius: 10px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; "
             "qproperty-alignment: AlignCenter;"
         )
-        lbl_card_title = QLabel("Connect Chrome Account")
+        lbl_card_title = QLabel("Connect Google Flow Account & Project")
         lbl_card_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc;")
         h_title.addWidget(lbl_badge)
         h_title.addWidget(lbl_card_title)
         h_title.addStretch()
-        v_left.addLayout(h_title)
+        layout.addLayout(h_title)
 
-        # Profile Pill (Avatar + Name + Status + Refresh)
-        self.frame_profile = QFrame()
-        self.frame_profile.setStyleSheet("background-color: #161c2b; border: 1px solid #252f44; border-radius: 8px; padding: 6px;")
-        h_prof = QHBoxLayout(self.frame_profile)
-        h_prof.setContentsMargins(8, 4, 8, 4)
-        h_prof.setSpacing(10)
+        # Row 1: Google Flow Account & Profile
+        h_acc_row = QHBoxLayout()
+        h_acc_row.setSpacing(10)
 
         self.lbl_avatar = QLabel()
-        self.lbl_avatar.setFixedSize(36, 36)
-        h_prof.addWidget(self.lbl_avatar)
+        self.lbl_avatar.setFixedSize(32, 32)
+        h_acc_row.addWidget(self.lbl_avatar)
 
-        v_names = QVBoxLayout()
-        v_names.setSpacing(1)
-        self.lbl_profile_name = QLabel("No Chrome Account Linked")
+        v_acc_info = QVBoxLayout()
+        v_acc_info.setSpacing(2)
+        h_acc_label_line = QHBoxLayout()
+        lbl_acc_title = QLabel("Google Flow Account:")
+        lbl_acc_title.setStyleSheet("font-size: 12px; color: #94a3b8; font-weight: 600;")
+        self.lbl_profile_name = QLabel("No Account Linked")
         self.lbl_profile_name.setStyleSheet("font-size: 13px; font-weight: 700; color: #f1f5f9;")
-        self.lbl_profile_email = QLabel("Click Link Account to connect")
-        self.lbl_profile_email.setStyleSheet("font-size: 11px; color: #94a3b8;")
-        v_names.addWidget(self.lbl_profile_name)
-        v_names.addWidget(self.lbl_profile_email)
-        h_prof.addLayout(v_names)
+        self.lbl_account_status = QLabel("● Disconnected")
+        self.lbl_account_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8;")
+        h_acc_label_line.addWidget(lbl_acc_title)
+        h_acc_label_line.addWidget(self.lbl_profile_name)
+        h_acc_label_line.addWidget(self.lbl_account_status)
+        h_acc_label_line.addStretch()
+        v_acc_info.addLayout(h_acc_label_line)
 
-        h_prof.addStretch()
+        self.lbl_profile_email = QLabel("")
+        self.lbl_profile_email.setStyleSheet("font-size: 11px; color: #64748b;")
+        v_acc_info.addWidget(self.lbl_profile_email)
+        h_acc_row.addLayout(v_acc_info)
+        h_acc_row.addStretch()
 
-        # Browser Open status indicator
-        v_browser_stat = QVBoxLayout()
-        v_browser_stat.setSpacing(1)
-        v_browser_stat.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.lbl_browser_status = QLabel("● Browser Not Open")
-        self.lbl_browser_status.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 11px;")
-        v_browser_stat.addWidget(self.lbl_browser_status)
-        h_prof.addLayout(v_browser_stat)
-
-        v_left.addWidget(self.frame_profile)
-
-        # Link / Change Account button
-        self.btn_link = QPushButton("🔗  Link / Change Account")
+        self.btn_link = QPushButton("🔄 Change Account")
         self.btn_link.setObjectName("linkBtn")
         self.btn_link.clicked.connect(self._open_selector_dialog)
-        v_left.addWidget(self.btn_link)
+        h_acc_row.addWidget(self.btn_link)
+        layout.addLayout(h_acc_row)
 
-        layout.addLayout(v_left, stretch=3)
-
-        # Right Column: Google Flow Status & Action Buttons
-        self.frame_flow_status = QFrame()
-        self.frame_flow_status.setStyleSheet("background-color: #121824; border: 1px solid #1e293b; border-radius: 8px; padding: 10px;")
-        v_status = QVBoxLayout(self.frame_flow_status)
-        v_status.setContentsMargins(10, 8, 10, 8)
-        v_status.setSpacing(6)
-
-        h_stat_head = QHBoxLayout()
-        self.lbl_flow_icon = QLabel("⚪")
-        self.lbl_flow_title = QLabel("Google Flow")
-        self.lbl_flow_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc;")
-        self.lbl_flow_state = QLabel("● Disconnected")
-        self.lbl_flow_state.setStyleSheet("font-size: 11px; font-weight: 600; color: #94a3b8;")
-
-        h_stat_head.addWidget(self.lbl_flow_icon)
-        h_stat_head.addWidget(self.lbl_flow_title)
-        h_stat_head.addStretch()
-        h_stat_head.addWidget(self.lbl_flow_state)
-        v_status.addLayout(h_stat_head)
-
-        self.lbl_flow_desc = QLabel("Connect to your open Chrome browser to automate Google Flow.")
+        # Row 2: Google Flow Project status line
+        h_proj_status_row = QHBoxLayout()
+        lbl_proj_title = QLabel("Google Flow Project:")
+        lbl_proj_title.setStyleSheet("font-size: 12px; color: #94a3b8; font-weight: 600;")
+        self.lbl_project_status = QLabel("● Ready")
+        self.lbl_project_status.setStyleSheet("font-size: 12px; font-weight: 700; color: #10b981;")
+        self.lbl_flow_desc = QLabel("Flow project linked.")
         self.lbl_flow_desc.setStyleSheet("font-size: 11px; color: #94a3b8;")
-        self.lbl_flow_desc.setWordWrap(True)
-        v_status.addWidget(self.lbl_flow_desc)
+        h_proj_status_row.addWidget(lbl_proj_title)
+        h_proj_status_row.addWidget(self.lbl_project_status)
+        h_proj_status_row.addSpacing(10)
+        h_proj_status_row.addWidget(self.lbl_flow_desc)
+        h_proj_status_row.addStretch()
+        layout.addLayout(h_proj_status_row)
 
-        # Buttons
+        # Row 3: Google Flow Project URL with Save button
+        v_url = QVBoxLayout()
+        v_url.setSpacing(4)
+        lbl_url_title = QLabel("Google Flow Project URL:")
+        lbl_url_title.setStyleSheet("font-size: 11px; font-weight: 600; color: #94a3b8;")
+        v_url.addWidget(lbl_url_title)
+
+        h_url = QHBoxLayout()
+        self.txt_project_url = QLineEdit(get_flow_project_url())
+        self.txt_project_url.setStyleSheet(
+            "background-color: #141a29; border: 1px solid #28354d; border-radius: 6px; "
+            "color: #f8fafc; padding: 6px 10px; font-size: 12px; font-family: Consolas, monospace;"
+        )
+        self.txt_project_url.setPlaceholderText("https://flow.google.com/project/...")
+        h_url.addWidget(self.txt_project_url)
+
+        self.btn_save_url = QPushButton("💾 Save")
+        self.btn_save_url.setObjectName("linkBtn")
+        self.btn_save_url.clicked.connect(self._save_project_url)
+        h_url.addWidget(self.btn_save_url)
+        v_url.addLayout(h_url)
+        layout.addLayout(v_url)
+
+        # Row 4: Action Buttons
         h_actions = QHBoxLayout()
-        self.btn_connect_chrome = QPushButton("🔗  Connect to Open Chrome")
-        self.btn_connect_chrome.setObjectName("connectChromeBtn")
-        self.btn_connect_chrome.clicked.connect(self.connect_to_open_chrome)
+        h_actions.setSpacing(8)
+
+        self.btn_connect_flow = QPushButton("🔗  Connect to Flow Project")
+        self.btn_connect_flow.setObjectName("connectChromeBtn")
+        self.btn_connect_flow.clicked.connect(self.connect_to_open_chrome)
+        h_actions.addWidget(self.btn_connect_flow)
+
+        self.btn_extension_setup = QPushButton("🧩 Chrome Extension Setup")
+        self.btn_extension_setup.setObjectName("linkBtn")
+        self.btn_extension_setup.clicked.connect(self._open_extension_setup)
+        h_actions.addWidget(self.btn_extension_setup)
 
         self.btn_scan = QPushButton("🔄")
-        self.btn_scan.setFixedSize(30, 30)
+        self.btn_scan.setFixedSize(32, 32)
         self.btn_scan.setStyleSheet("background-color: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #cbd5e1;")
-        self.btn_scan.setToolTip("Scan open Chrome tabs")
+        self.btn_scan.setToolTip("Scan open Chrome tabs & extension bridge")
         self.btn_scan.clicked.connect(self.scan_flow_tabs)
-
-        h_actions.addWidget(self.btn_connect_chrome)
         h_actions.addWidget(self.btn_scan)
-        v_status.addLayout(h_actions)
 
-        layout.addWidget(self.frame_flow_status, stretch=3)
+        layout.addLayout(h_actions)
 
     def _start_status_timer(self):
-        """Poll Chrome process status periodically in background."""
+        """Poll Chrome process status and extension bridge periodically in background."""
         self.status_timer = QTimer(self)
-        self.status_timer.setInterval(4000)
+        self.status_timer.setInterval(3000)
         self.status_timer.timeout.connect(self._update_system_status)
         self.status_timer.start()
         self._update_system_status()
 
     def _update_system_status(self):
-        """Update live status of Chrome and CDP endpoint."""
+        """Update live status of Chrome, Extension bridge, and Flow project tab."""
         chrome_running = ChromeProfileManager.is_chrome_running()
-        if chrome_running:
-            self.lbl_browser_status.setText("● Browser Open")
-            self.lbl_browser_status.setStyleSheet("color: #10b981; font-weight: 600; font-size: 11px;")
-        else:
-            self.lbl_browser_status.setText("● Browser Closed")
-            self.lbl_browser_status.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 11px;")
+        prof_name = self.current_profile.display_name if self.current_profile else "Default"
+        bridge = ExtensionBridgeServer.get_instance()
+        ext_connected = bridge.is_profile_connected(prof_name)
 
-        # Check if flow tab is alive
-        if self.connector.is_connected and self.connector.is_flow_tab_ready():
-            self.lbl_flow_icon.setText("🟢")
-            self.lbl_flow_state.setText("● Connected to Existing Tab")
-            self.lbl_flow_state.setStyleSheet("color: #10b981; font-weight: 600; font-size: 11px;")
-            tab_title = self.connector.connected_tab_info.get("title", "Google Flow")
-            self.lbl_flow_desc.setText(f"Controlling active tab: '{tab_title}'")
-            self.btn_connect_chrome.setText("🔌  Disconnect")
-            self.btn_connect_chrome.setObjectName("disconnectBtn")
-            self.sig_connection_status_changed.emit(True)
-        elif self.connector.is_connected:
-            self.lbl_flow_icon.setText("🟡")
-            self.lbl_flow_state.setText("● Tab Lost")
-            self.lbl_flow_state.setStyleSheet("color: #f59e0b; font-weight: 600; font-size: 11px;")
-            self.lbl_flow_desc.setText("Google Flow tab was closed or redirected.")
-            self.btn_connect_chrome.setText("🔗  Connect to Open Chrome")
-            self.btn_connect_chrome.setObjectName("connectChromeBtn")
-            self.sig_connection_status_changed.emit(False)
+        if chrome_running or ext_connected:
+            self.lbl_account_status.setText("● Connected")
+            self.lbl_account_status.setStyleSheet("color: #10b981; font-weight: 700; font-size: 11px;")
         else:
-            # Check if CDP port has flow tabs waiting
+            self.lbl_account_status.setText("● Browser Closed")
+            self.lbl_account_status.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 11px;")
+
+        # Flow project status
+        if self.connector.is_connected and self.connector.is_flow_tab_ready():
+            self.lbl_project_status.setText("● Ready")
+            self.lbl_project_status.setStyleSheet("color: #10b981; font-weight: 700; font-size: 12px;")
+            tab_title = self.connector.connected_tab_info.get("title", "Google Flow")
+            self.lbl_flow_desc.setText(f"Active tab: '{tab_title}'")
+            self.btn_connect_flow.setText("🔌  Disconnect")
+            self.sig_connection_status_changed.emit(True)
+        elif ext_connected:
+            self.lbl_project_status.setText("● Ready (via Extension)")
+            self.lbl_project_status.setStyleSheet("color: #10b981; font-weight: 700; font-size: 12px;")
+            self.lbl_flow_desc.setText("Chrome extension active in selected profile.")
+            self.btn_connect_flow.setText("🔗  Open / Verify Flow Project")
+            self.sig_connection_status_changed.emit(True)
+        else:
             if ChromeProfileManager.is_cdp_available(9222):
                 tabs = ChromeProfileManager.find_flow_tabs(9222)
                 if tabs:
-                    self.lbl_flow_icon.setText("🔵")
-                    self.lbl_flow_state.setText("● Tab Detected")
-                    self.lbl_flow_state.setStyleSheet("color: #60a5fa; font-weight: 600; font-size: 11px;")
-                    self.lbl_flow_desc.setText(f"Found {len(tabs)} Google Flow tab(s). Click to connect.")
+                    self.lbl_project_status.setText("● Tab Detected")
+                    self.lbl_project_status.setStyleSheet("color: #60a5fa; font-weight: 700; font-size: 12px;")
+                    self.lbl_flow_desc.setText(f"Found {len(tabs)} Flow tab(s). Click Connect.")
                 else:
-                    self.lbl_flow_icon.setText("⚪")
-                    self.lbl_flow_state.setText("● Tab Not Found")
-                    self.lbl_flow_state.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 11px;")
-                    self.lbl_flow_desc.setText("Chrome is open, but no Google Flow tab found.")
-            self.btn_connect_chrome.setText("🔗  Connect to Open Chrome")
-            self.btn_connect_chrome.setObjectName("connectChromeBtn")
+                    self.lbl_project_status.setText("● Tab Not Found")
+                    self.lbl_project_status.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+                    self.lbl_flow_desc.setText("Chrome open. Open Flow or click Connect.")
+            else:
+                self.lbl_project_status.setText("● Disconnected")
+                self.lbl_project_status.setStyleSheet("color: #94a3b8; font-weight: 700; font-size: 12px;")
+                self.lbl_flow_desc.setText("Click 'Connect to Flow Project' to link.")
+            self.btn_connect_flow.setText("🔗  Connect to Flow Project")
             self.sig_connection_status_changed.emit(False)
 
-        # Refresh style
-        self.btn_connect_chrome.style().unpolish(self.btn_connect_chrome)
-        self.btn_connect_chrome.style().polish(self.btn_connect_chrome)
+        self.btn_connect_flow.style().unpolish(self.btn_connect_flow)
+        self.btn_connect_flow.style().polish(self.btn_connect_flow)
+
+    def _save_project_url(self):
+        url = self.txt_project_url.text().strip()
+        if not url:
+            url = DEFAULT_FLOW_PROJECT_URL
+            self.txt_project_url.setText(url)
+        set_flow_project_url(url)
+        logger.info(f"Saved Google Flow project URL: {url}")
+        QMessageBox.information(self, "Project URL Saved", f"✓ Saved Google Flow Project URL:\n{url}")
+
+    def _open_extension_setup(self):
+        dlg = ChromeExtensionSetupDialog(self)
+        dlg.exec()
 
     def _load_initial_profile(self):
         saved = ChromeProfileManager.get_saved_profile()
@@ -643,7 +757,7 @@ class ChromeAccountWidget(QFrame):
         self.current_profile = profile
         ChromeProfileManager.save_linked_profile(profile)
 
-        pix = profile.get_avatar_pixmap(size=36)
+        pix = profile.get_avatar_pixmap(size=32)
         self.lbl_avatar.setPixmap(pix)
         self.lbl_profile_name.setText(profile.display_name)
         self.lbl_profile_email.setText(profile.email or profile.directory_name)
@@ -663,76 +777,110 @@ class ChromeAccountWidget(QFrame):
         self._update_system_status()
 
     def connect_to_open_chrome(self):
-        """Main connection workflow adhering to Mode A & Mode B requirements."""
+        """Connect to exact Flow project in selected Chrome profile without extra Chrome."""
         if not self.current_profile:
             QMessageBox.warning(self, "Profile Required", "Please link a Chrome profile first.")
             return
 
-        # If already connected, clicking the button disconnects safely
+        proj_url = self.txt_project_url.text().strip()
+        if not proj_url:
+            proj_url = DEFAULT_FLOW_PROJECT_URL
+            self.txt_project_url.setText(proj_url)
+        set_flow_project_url(proj_url)
+
+        prof_name = self.current_profile.display_name
+
+        # If already connected, clicking disconnects safely
         if self.connector.is_connected and self.connector.is_flow_tab_ready():
             self.connector.close()
             self._update_system_status()
             logger.info("Disconnected from Google Flow tab.")
             return
 
-        logger.info(f"Checking existing browser connection for profile: {self.current_profile.display_name}...")
+        logger.info(f"Connecting to Google Flow project ({proj_url}) for profile: {prof_name}...")
 
-        # 1. Mode A: Try to connect to existing automation session
+        # 1. Try CDP session
         ok, status, tabs = self.connector.connect_to_existing_chrome(port=9222)
+        if ok and (status == "CONNECTED_TO_FLOW" or status == "MULTIPLE_FLOW_TABS"):
+            if status == "MULTIPLE_FLOW_TABS":
+                dlg = FlowTabSelectionDialog(tabs, parent=self)
+                if dlg.exec() == QDialog.Accepted:
+                    sel_idx = dlg.selected_tab_index
+                    chosen_tab = tabs[sel_idx]
+                    self.connector.connect_to_existing_chrome(port=9222, target_tab_id=str(chosen_tab.get("index", 0)))
 
-        if ok and status == "CONNECTED_TO_FLOW":
+            nav_ok, nav_msg = self.connector.navigate_to_exact_project(proj_url)
+            ver_ok, ver_msg = self.connector.verify_exact_project(proj_url, timeout_sec=20.0)
             self._update_system_status()
-            tab_name = tabs[0].get("title", "Google Flow") if tabs else "Google Flow"
-            QMessageBox.information(
-                self,
-                "Google Flow Connected",
-                f"✓ Connected to Google Flow tab successfully!\n\n"
-                f"Chrome Profile: {self.current_profile.display_name}\n"
-                f"Active Tab: {tab_name}\n"
-                f"Status: Ready for chained automation"
-            )
+
+            if ver_ok:
+                QMessageBox.information(
+                    self,
+                    "Google Flow Connected",
+                    f"✓ Connected to Google Flow project successfully!\n\n"
+                    f"Chrome Profile: {prof_name}\n"
+                    f"Project URL: {proj_url}\n"
+                    f"Status: Ready for chained automation"
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Loading Flow Project",
+                    f"Google Flow tab navigated, but still loading or requires attention:\n{ver_msg}"
+                )
             return
 
-        if status == "MULTIPLE_FLOW_TABS":
-            # Prompt user to choose which Flow tab to connect to
-            dlg = FlowTabSelectionDialog(tabs, parent=self)
-            if dlg.exec() == QDialog.Accepted:
-                sel_idx = dlg.selected_tab_index
-                chosen_tab = tabs[sel_idx]
-                self.connector.connect_to_existing_chrome(port=9222, target_tab_id=str(chosen_tab.get("index", 0)))
-                self._update_system_status()
-            return
+        # 2. Check Extension Bridge
+        bridge = ExtensionBridgeServer.get_instance()
+        if bridge.is_profile_connected(prof_name):
+            logger.info(f"Extension bridge active for profile '{prof_name}'. Opening project...")
+            nav_ok, nav_msg = self.connector.navigate_to_exact_project(proj_url)
+            ver_ok, ver_msg = self.connector.verify_exact_project(proj_url, timeout_sec=15.0)
+            self._update_system_status()
+            if ver_ok or nav_ok:
+                QMessageBox.information(
+                    self,
+                    "Connected via Extension",
+                    f"✓ Google Flow project opened via Chrome Extension!\n\n"
+                    f"Profile: {prof_name}\n"
+                    f"Project: {proj_url}\n"
+                    f"Status: Ready"
+                )
+                return
 
-        if status == "FLOW_TAB_NOT_FOUND":
-            # Chrome is connected via CDP, but Flow is not open
-            dlg = FlowNotFoundDialog(parent=self)
-            dlg.sig_open_flow.connect(self._open_flow_in_session)
-            dlg.sig_scan_again.connect(self.connect_to_open_chrome)
-            dlg.exec()
-            return
-
-        # 2. Mode B: Chrome is running normally without CDP
+        # 3. Chrome running without CDP or Extension
         if status == "CHROME_RUNNING_WITHOUT_CDP":
-            dlg = ModeBAutomationDialog(self.current_profile, parent=self)
-            dlg.sig_launch_requested.connect(self._launch_connected_chrome)
-            dlg.exec()
+            ret = QMessageBox.question(
+                self,
+                "Connect Chrome Profile",
+                f"Chrome profile '<b>{prof_name}</b>' is open.<br><br>"
+                "<b>Choose your preferred connection method:</b><br><br>"
+                "• <b>Click 'Yes'</b> to open Extension Setup (no Chrome restart required!)<br>"
+                "• <b>Click 'No'</b> to restart Chrome with CDP automation enabled",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            if ret == QMessageBox.Yes:
+                self._open_extension_setup()
+            elif ret == QMessageBox.No:
+                dlg = ModeBAutomationDialog(self.current_profile, parent=self)
+                dlg.sig_launch_requested.connect(self._launch_connected_chrome)
+                dlg.exec()
             return
 
-        # 3. Chrome is not running at all
+        # 4. Chrome not running
         if status == "CHROME_NOT_RUNNING":
             ret = QMessageBox.question(
                 self,
                 "Launch Chrome",
-                f"Google Chrome is not currently open.\n\n"
-                f"Would you like to launch Chrome with profile '{self.current_profile.display_name}' "
-                "and open Google Flow now?",
+                f"Google Chrome is not open.\n\n"
+                f"Launch Chrome with profile '{prof_name}' and open the project now?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if ret == QMessageBox.Yes:
                 self._launch_connected_chrome()
             return
 
-        QMessageBox.warning(self, "Connection Failed", f"Could not connect to Chrome session: {status}")
+        QMessageBox.warning(self, "Connection Issue", f"Could not connect to Chrome session: {status}")
 
     def _open_flow_in_session(self):
         """Open Google Flow tab in the connected Chrome session."""
@@ -746,10 +894,11 @@ class ChromeAccountWidget(QFrame):
     def _launch_connected_chrome(self):
         """Launch the user's Chrome with CDP enabled on port 9222."""
         prof_dir = self.current_profile.directory_name if self.current_profile else "Default"
+        proj_url = self.txt_project_url.text().strip() or get_flow_project_url()
         ok, msg = ChromeProfileManager.launch_chrome_with_cdp(
             profile_dir_name=prof_dir,
             port=9222,
-            url="https://flow.google.com/"
+            url=proj_url
         )
         if not ok:
             QMessageBox.critical(self, "Launch Error", f"Could not launch Chrome: {msg}")

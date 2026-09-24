@@ -162,6 +162,46 @@ class TestChainedEvolutionStudio(unittest.TestCase):
         scene_2_data = state.data["scenes"]["2"]
         self.assertEqual(scene_2_data["reference_used"], str(f1))
 
+    def test_06_flow_project_url_config(self):
+        """Verify Google Flow project URL getter, setter, and persistence."""
+        from core.config import get_flow_project_url, set_flow_project_url, DEFAULT_FLOW_PROJECT_URL
+        test_url = "https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4"
+        set_flow_project_url(test_url)
+        self.assertEqual(get_flow_project_url(), test_url)
+
+    def test_07_extension_bridge_and_exact_project(self):
+        """Verify extension bridge server HTTP endpoints and exact project navigation."""
+        import urllib.request
+        import json
+        from core.extension_bridge import ExtensionBridgeServer
+        bridge = ExtensionBridgeServer.get_instance()
+        bridge.start()
+
+        # Test GET /status
+        req = urllib.request.urlopen("http://127.0.0.1:18999/status", timeout=3.0)
+        data = json.loads(req.read().decode("utf-8"))
+        self.assertEqual(data.get("status"), "OK")
+        self.assertEqual(data.get("app"), "Chained Evolution Studio")
+
+        # Test POST /poll
+        poll_req = urllib.request.Request(
+            "http://127.0.0.1:18999/poll",
+            data=json.dumps({"profileName": "YOUTUBE"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        poll_resp = urllib.request.urlopen(poll_req, timeout=3.0)
+        self.assertEqual(poll_resp.status, 200)
+
+        # Check if profile is reported connected
+        self.assertTrue(bridge.is_profile_connected("YOUTUBE"))
+
+        # Test SimulatedFlowConnector exact project methods
+        connector = SimulatedFlowConnector(step_delay_sec=0.01)
+        ok, msg = connector.navigate_to_exact_project("https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4")
+        self.assertTrue(ok)
+        ok, msg = connector.verify_exact_project("https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4")
+        self.assertTrue(ok)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
-from core.config import DEFAULT_MAX_RETRIES, ENABLE_SOUNDS
+from core.config import DEFAULT_MAX_RETRIES, ENABLE_SOUNDS, get_flow_project_url
 from core.state_manager import ProjectState
 from core.project_manager import ProjectManager
 from core.ffmpeg_extractor import FFmpegExtractor
@@ -97,13 +97,14 @@ class ExecutionEngine(QThread):
             self._handle_failure(0, err)
             return
 
-        # Initialize / verify connector
+        # Step 1: Check selected profile
         prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
         logger.info(f"Selected Chrome Profile: {prof_name}")
-        logger.info("Checking existing browser connection...")
+        self.sig_substep_changed.emit("Profile Check", "ACTIVE")
 
+        # Step 2: Check extension / CDP connection
+        self.sig_substep_changed.emit("Browser Connection", "ACTIVE")
         if not getattr(self.connector, "is_connected", False) or not self.connector.is_flow_tab_ready():
-            self.sig_substep_changed.emit("Browser Session", "ACTIVE")
             try:
                 ok, msg = self.connector.initialize(chrome_profile=self.chrome_profile)
             except TypeError:
@@ -112,22 +113,40 @@ class ExecutionEngine(QThread):
                 logger.error(f"Cannot proceed with automation: {msg}")
                 self._handle_failure(0, f"Could not connect to browser: {msg}")
                 return
-            self.sig_substep_changed.emit("Browser Session", "COMPLETE")
 
-        # Verify Google Flow tab connection is active
-        if not self.connector.is_flow_tab_ready():
-            logger.error("Google Flow tab is not connected.")
-            self._handle_failure(0, "Google Flow tab is not connected. Please connect via 'Connect to Open Chrome'.")
+        logger.info(f"✓ Chrome Profile Connected: {prof_name}")
+        self.sig_substep_changed.emit("Browser Connection", "COMPLETE")
+
+        # Step 3: Open exact Google Flow project
+        project_url = get_flow_project_url()
+        proj_id = project_url.strip("/").split("/")[-1] if "/" in project_url else project_url
+        logger.info(f"Navigating to exact Google Flow project: {project_url}")
+        self.sig_substep_changed.emit("Project Navigation", "ACTIVE")
+
+        ok, msg = self.connector.navigate_to_exact_project(project_url)
+        if not ok:
+            logger.error(f"Failed to open Google Flow project: {msg}")
+            self._handle_failure(0, f"Could not open project: {msg}")
             return
 
-        logger.info("Existing automation session found")
-        logger.info(f"Browser profile verified: {prof_name}")
-        logger.info("Google Flow tab detected")
-        logger.info("Connected to Google Flow tab")
-        logger.info("Browser automation ready")
-        logger.info("Browser Connection: Chrome Profile Connected")
-        logger.info("Google Flow: Existing Tab Connected")
-        logger.info("Automation: Ready")
+        logger.info("✓ Google Flow Opened")
+        self.sig_substep_changed.emit("Project Navigation", "COMPLETE")
+
+        # Step 4, 5, 6: Wait for page load & Verify Flow project & ready
+        self.sig_substep_changed.emit("Project Verification", "ACTIVE")
+        logger.info(f"Verifying project {proj_id} readiness in Google Flow...")
+        ok, msg = self.connector.verify_exact_project(project_url, timeout_sec=45.0)
+        if not ok:
+            logger.error(f"Google Flow project verification failed: {msg}")
+            self._handle_failure(0, f"Google Flow project verification failed: {msg}")
+            return
+
+        logger.info(f"✓ Project Loaded: {proj_id}")
+        logger.info("✓ Flow Ready")
+        logger.info("Next: Upload Master Image")
+        self.sig_substep_changed.emit("Project Verification", "COMPLETE")
+
+        # Step 7: Proceed to scenes
         logger.info("Starting Scene 1...")
 
         completed_in_this_run = 0

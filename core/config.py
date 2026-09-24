@@ -42,6 +42,39 @@ DEFAULT_GENERATION_TIMEOUT_SEC = 600  # 10 minutes
 DEFAULT_BROWSER_CHANNEL = "chrome"  # use installed Google Chrome
 GOOGLE_FLOW_URL = "https://flow.google"
 FALLBACK_LABS_URL = "https://labs.google/fx/tools/flow"
+DEFAULT_FLOW_PROJECT_URL = "https://flow.google.com/project/aa6e6e2c-c62d-43c6-88fe-56d75dff99e4"
+
+SETTINGS_FILE = BASE_DIR / "app_settings.json"
+
+def get_flow_project_url() -> str:
+    """Retrieve saved Google Flow project URL or return default."""
+    import json
+    if SETTINGS_FILE.is_file():
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("flow_project_url", DEFAULT_FLOW_PROJECT_URL)
+        except Exception:
+            pass
+    return DEFAULT_FLOW_PROJECT_URL
+
+def set_flow_project_url(url: str):
+    """Save Google Flow project URL to settings file."""
+    import json
+    data = {}
+    if SETTINGS_FILE.is_file():
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    data["flow_project_url"] = url.strip()
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 # Sound configurations
 ENABLE_SOUNDS = True
+

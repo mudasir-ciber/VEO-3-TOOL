@@ -89,6 +89,16 @@ class SimulatedFlowConnector(BaseFlowConnector):
         logger.info(f"[SIMULATION MODE] Video generated and saved to: {dest.name}")
         return True, "Downloaded successfully"
 
+    def navigate_to_exact_project(self, project_url: str) -> Tuple[bool, str]:
+        time.sleep(self.step_delay)
+        logger.info(f"[SIMULATION MODE] Navigated to exact project: {project_url}")
+        return True, "Navigated to project (Simulation)"
+
+    def verify_exact_project(self, project_url: str, timeout_sec: float = 45.0) -> Tuple[bool, str]:
+        time.sleep(self.step_delay)
+        logger.info(f"[SIMULATION MODE] Verified exact project is ready: {project_url}")
+        return True, "Project verified and ready (Simulation)"
+
     def close(self):
         self.is_connected = False
         logger.info("[SIMULATION MODE] Closed.")

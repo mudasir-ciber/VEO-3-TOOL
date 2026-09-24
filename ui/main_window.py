@@ -18,6 +18,7 @@ from core.sound_player import SoundPlayer
 from core.logger import logger, AppLogger
 from core.execution_engine import ExecutionEngine
 from core.chrome_profile_manager import ChromeProfile, ChromeProfileManager
+from core.extension_bridge import ExtensionBridgeServer
 from connector.flow_browser import PlaywrightFlowConnector
 from connector.flow_mock import SimulatedFlowConnector
 
@@ -43,6 +44,9 @@ class MainWindow(QMainWindow):
         self.is_simulation_mode = False
         self.max_retries = 3
         self.auto_open_folder = True
+
+        # Start Extension Bridge Server for Chrome Extension communication
+        ExtensionBridgeServer.get_instance().start()
 
         self._init_ui()
         self._load_styles()
@@ -106,6 +110,7 @@ class MainWindow(QMainWindow):
         # Card 2: Connect Chrome Account
         self.card_chrome_account = ChromeAccountWidget(self)
         self.card_chrome_account.sig_profile_changed.connect(self._on_chrome_profile_changed)
+        self.card_chrome = self.card_chrome_account
         v_right_col.addWidget(self.card_chrome_account)
 
         # Scene Preview & Vertical Stepper Card
@@ -294,36 +299,54 @@ class MainWindow(QMainWindow):
             self.active_connector = SimulatedFlowConnector(step_delay_sec=1.0)
         else:
             chrome_conn = self.card_chrome.connector
+            prof_name = self.current_chrome_profile.display_name if self.current_chrome_profile else "Default"
+            bridge = ExtensionBridgeServer.get_instance()
+            ext_connected = bridge.is_profile_connected(prof_name)
+
             if chrome_conn.is_connected and chrome_conn.is_flow_tab_ready():
                 self.active_connector = chrome_conn
+            elif ext_connected:
+                # Extension bridge connected in this profile
+                self.active_connector = chrome_conn
+                self.card_chrome._update_system_status()
             else:
-                # Attempt to attach to existing open Chrome session
+                # Attempt to attach to existing open Chrome session via CDP
                 ok, status, tabs = chrome_conn.connect_to_existing_chrome(port=9222)
-                if ok and status == "CONNECTED_TO_FLOW":
+                if ok and (status == "CONNECTED_TO_FLOW" or status == "FLOW_TAB_NOT_FOUND"):
                     self.active_connector = chrome_conn
                     self.card_chrome._update_system_status()
                 elif status == "MULTIPLE_FLOW_TABS":
-                    # Prompt user to select which Flow tab
                     self.card_chrome.connect_to_open_chrome()
-                    return
-                elif status == "FLOW_TAB_NOT_FOUND":
-                    QMessageBox.warning(
-                        self,
-                        "Google Flow Tab Not Found",
-                        "No Google Flow tab was detected in your open Chrome browser.<br><br>"
-                        "Please open <b>https://flow.google.com/</b> in Chrome, then click 'Connect to Open Chrome' or RUN again."
-                    )
                     return
                 elif status == "CHROME_RUNNING_WITHOUT_CDP":
-                    # Chrome is running without automation endpoint - show Mode B dialog
-                    self.card_chrome.connect_to_open_chrome()
+                    # Prompt user to connect extension or restart
+                    ret = QMessageBox.question(
+                        self,
+                        "Chrome Connection Required",
+                        f"Your Chrome profile '<b>{prof_name}</b>' is open, but neither the Chrome Extension nor CDP automation is connected.<br><br>"
+                        "<b>Choose your preferred connection method:</b><br><br>"
+                        "• <b>Click 'Yes'</b> to open Extension Setup (Zero restart needed!)<br>"
+                        "• <b>Click 'No'</b> to restart Chrome with CDP automation enabled",
+                        QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                    )
+                    if ret == QMessageBox.Yes:
+                        self.card_chrome._open_extension_setup()
+                    elif ret == QMessageBox.No:
+                        self.card_chrome.connect_to_open_chrome()
+                    return
+                elif status == "CHROME_NOT_RUNNING":
+                    ret = QMessageBox.question(
+                        self,
+                        "Launch Chrome",
+                        f"Google Chrome is not currently open.\n\n"
+                        f"Launch Chrome with profile '{prof_name}' now?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if ret == QMessageBox.Yes:
+                        self.card_chrome._launch_connected_chrome()
                     return
                 else:
-                    QMessageBox.warning(
-                        self,
-                        "Browser Connection Required",
-                        "Please connect your Chrome browser to Google Flow by clicking 'Connect to Open Chrome' in Card 2 before starting automation."
-                    )
+                    self.card_chrome.connect_to_open_chrome()
                     return
 
         # Create ExecutionEngine worker
@@ -449,3 +472,10 @@ class MainWindow(QMainWindow):
     def _on_engine_stopped(self):
         self.card_prompts.set_running_state(is_running=False)
         logger.info("Process stopped. State preserved on disk.")
+
+    def closeEvent(self, event):
+        try:
+            ExtensionBridgeServer.get_instance().stop()
+        except Exception:
+            pass
+        super().closeEvent(event)

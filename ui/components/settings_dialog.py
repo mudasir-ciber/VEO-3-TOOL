@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 
 from core.config import (
     DEFAULT_MAX_RETRIES, DEFAULT_BROWSER_PROFILE_DIR, DEFAULT_PROJECTS_DIR,
-    ENABLE_SOUNDS, DEFAULT_GENERATION_TIMEOUT_SEC
+    ENABLE_SOUNDS, DEFAULT_GENERATION_TIMEOUT_SEC, get_flow_project_url, set_flow_project_url
 )
 from core.system_checker import SystemChecker
 
@@ -59,6 +59,11 @@ class SettingsDialog(QDialog):
         btn_profile.clicked.connect(self._browse_profile)
         grid_browser.addWidget(self.txt_profile, 1, 1)
         grid_browser.addWidget(btn_profile, 1, 2)
+
+        grid_browser.addWidget(QLabel("Google Flow Project URL:"), 2, 0)
+        self.txt_flow_url = QLineEdit(get_flow_project_url())
+        self.txt_flow_url.setPlaceholderText("https://flow.google.com/project/...")
+        grid_browser.addWidget(self.txt_flow_url, 2, 1, 1, 2)
 
         layout.addWidget(grp_browser)
 
@@ -110,10 +115,14 @@ class SettingsDialog(QDialog):
             self.txt_profile.setText(dir_selected)
 
     def get_settings(self) -> dict:
+        flow_url = self.txt_flow_url.text().strip()
+        if flow_url:
+            set_flow_project_url(flow_url)
         return {
             "max_retries": self.spn_retries.value(),
             "generation_timeout": self.spn_timeout.value(),
             "browser_profile": self.txt_profile.text(),
+            "flow_project_url": flow_url,
             "play_success_sound": self.chk_sound_success.isChecked(),
             "play_failure_sound": self.chk_sound_fail.isChecked(),
             "auto_open_folder": self.chk_auto_open.isChecked()

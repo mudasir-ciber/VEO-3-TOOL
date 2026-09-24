@@ -61,3 +61,11 @@ class BaseFlowConnector(ABC):
         """Open a new Google Flow tab in the connected Chrome session."""
         return True, "Opened Google Flow"
 
+    def navigate_to_exact_project(self, project_url: str) -> Tuple[bool, str]:
+        """Navigate or switch to the exact Google Flow project tab."""
+        return True, "Navigated to project"
+
+    def verify_exact_project(self, project_url: str, timeout_sec: float = 45.0) -> Tuple[bool, str]:
+        """Verify the exact Google Flow project is fully loaded and ready."""
+        return True, "Project verified and ready"
+
