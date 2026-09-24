@@ -97,10 +97,17 @@ class SystemChecker:
         except Exception:
             pass
 
-        # 2. Check local tools folder
-        local_tool = Path(__file__).resolve().parent.parent / "tools" / "ffmpeg.exe"
-        if local_tool.is_file():
-            return str(local_tool)
+        # 2. Check PyInstaller bundle dir and local tools
+        from core.config import BUNDLE_DIR, BASE_DIR
+        bundle_candidates = [
+            BUNDLE_DIR / "imageio_ffmpeg" / "binaries" / "ffmpeg-win-x86_64-v7.1.exe",
+            BASE_DIR / "ffmpeg.exe",
+            BASE_DIR / "tools" / "ffmpeg.exe",
+            Path(__file__).resolve().parent.parent / "tools" / "ffmpeg.exe"
+        ]
+        for c in bundle_candidates:
+            if c.is_file():
+                return str(c)
 
         # 3. Check system PATH
         path_exe = shutil.which("ffmpeg")

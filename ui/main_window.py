@@ -84,10 +84,19 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.log_viewer)
 
     def _load_styles(self):
-        qss_path = Path(__file__).resolve().parent / "styles" / "dark_theme.qss"
-        if qss_path.is_file():
-            with open(qss_path, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
+        from core.config import BUNDLE_DIR
+        candidates = [
+            BUNDLE_DIR / "ui" / "styles" / "dark_theme.qss",
+            Path(__file__).resolve().parent / "styles" / "dark_theme.qss"
+        ]
+        for qss_path in candidates:
+            if qss_path.is_file():
+                try:
+                    with open(qss_path, "r", encoding="utf-8") as f:
+                        self.setStyleSheet(f.read())
+                    break
+                except Exception:
+                    pass
 
     def _setup_logging(self):
         AppLogger.get_instance().register_callback(self.log_viewer.append_log)

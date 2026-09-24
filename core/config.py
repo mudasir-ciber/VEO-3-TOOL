@@ -9,7 +9,13 @@ APP_VERSION = "1.0.0"
 AUTHOR = "DeepMind / Pair Programmer"
 
 # Base paths
-BASE_DIR = Path(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+    BUNDLE_DIR = Path(getattr(sys, '_MEIPASS', BASE_DIR))
+else:
+    BASE_DIR = Path(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+    BUNDLE_DIR = BASE_DIR
+
 DEFAULT_PROJECTS_DIR = BASE_DIR / "Projects"
 DEFAULT_BROWSER_PROFILE_DIR = BASE_DIR / "browser_profile"
 LOGS_DIR = BASE_DIR / "logs"
