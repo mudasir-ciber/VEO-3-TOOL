@@ -1,9 +1,13 @@
-"""Main application window for Chained Evolution Studio matching UX reference mockup."""
+"""
+VEO 3 Chained Evolution Studio - Main Application Window
+Full Native Messaging & Multi-Profile Architecture
+"""
 import os
 import sys
+import time
 import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -17,14 +21,13 @@ from core.project_manager import ProjectManager
 from core.sound_player import SoundPlayer
 from core.logger import logger, AppLogger
 from core.execution_engine import ExecutionEngine
-from core.chrome_profile_manager import ChromeProfile, ChromeProfileManager
-from core.extension_bridge import ExtensionBridgeServer
-from connector.flow_browser import PlaywrightFlowConnector
+from core.extension_bridge import ExtensionBridgeServer, ExtensionProfile
+from connector.flow_extension import ExtensionFlowConnector
 from connector.flow_mock import SimulatedFlowConnector
 
 from ui.components.sidebar import SidebarWidget
 from ui.components.project_cards import ProjectNameCard, MasterImageCard, ScenePromptsCard
-from ui.components.chrome_account_widget import ChromeAccountWidget
+from ui.components.multi_profile_widget import MultiProfileWidget
 from ui.components.scene_preview_card import ScenePreviewCard
 from ui.components.log_viewer import LogViewerWidget
 from ui.components.settings_dialog import SettingsDialog
@@ -33,20 +36,21 @@ from ui.components.settings_dialog import SettingsDialog
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.resize(1240, 840)
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION} — Multi-Profile Edition")
+        self.resize(1260, 860)
         self.setMinimumSize(1080, 720)
 
         self.project_state: Optional[ProjectState] = None
         self.engine: Optional[ExecutionEngine] = None
         self.active_connector = None
-        self.current_chrome_profile: Optional[ChromeProfile] = None
         self.is_simulation_mode = False
         self.max_retries = 3
         self.auto_open_folder = True
 
-        # Start Extension Bridge Server for Chrome Extension communication
-        ExtensionBridgeServer.get_instance().start()
+        # 1. Start Multi-Profile Extension Bridge Server
+        self.bridge = ExtensionBridgeServer.get_instance()
+        self.bridge.start()
+        self.bridge.add_event_listener(self._on_bridge_event)
 
         self._init_ui()
         self._load_styles()
@@ -54,7 +58,6 @@ class MainWindow(QMainWindow):
         self._init_default_project()
 
     def _init_ui(self):
-        # Root widget
         root_widget = QWidget()
         self.setCentralWidget(root_widget)
         root_layout = QHBoxLayout(root_widget)
@@ -68,11 +71,11 @@ class MainWindow(QMainWindow):
         self.sidebar.sig_nav_help.connect(self._show_help_dialog)
         root_layout.addWidget(self.sidebar)
 
-        # 2. Main Content Dashboard (Scrollable)
+        # 2. Main Dashboard (Scrollable)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #080b11; }")
-        
+
         content_widget = QWidget()
         content_widget.setStyleSheet("background-color: #080b11;")
         content_layout = QHBoxLayout(content_widget)
@@ -88,17 +91,19 @@ class MainWindow(QMainWindow):
         self.card_project_name.sig_name_changed.connect(self._on_project_name_changed)
         v_left_col.addWidget(self.card_project_name)
 
-        # Card 3: Master Image
+        # Card 2: Master Image
         self.card_master_image = MasterImageCard(self)
         self.card_master_image.sig_master_image_selected.connect(self._on_master_image_set)
         self.card_master_image.sig_master_image_removed.connect(self._on_master_image_removed)
         v_left_col.addWidget(self.card_master_image)
 
-        # Card 4: Scene Prompts
+        # Card 3: Scene Prompts & Execution Controls
         self.card_prompts = ScenePromptsCard(self)
         self.card_prompts.sig_run_clicked.connect(self._start_execution)
         self.card_prompts.sig_pause_clicked.connect(self._pause_execution)
         self.card_prompts.sig_stop_clicked.connect(self._stop_execution)
+        self.card_prompts.sig_retry_clicked.connect(self._retry_current_scene)
+        self.card_prompts.sig_open_folder_clicked.connect(self._open_projects_folder)
         v_left_col.addWidget(self.card_prompts)
 
         content_layout.addLayout(v_left_col, stretch=5)
@@ -107,17 +112,15 @@ class MainWindow(QMainWindow):
         v_right_col = QVBoxLayout()
         v_right_col.setSpacing(14)
 
-        # Card 2: Connect Chrome Account
-        self.card_chrome_account = ChromeAccountWidget(self)
-        self.card_chrome_account.sig_profile_changed.connect(self._on_chrome_profile_changed)
-        self.card_chrome = self.card_chrome_account
-        v_right_col.addWidget(self.card_chrome_account)
+        # Card 4: Multi-Profile Discovery & Selection Widget
+        self.card_multi_profile = MultiProfileWidget(self)
+        v_right_col.addWidget(self.card_multi_profile)
 
-        # Scene Preview & Vertical Stepper Card
+        # Card 5: Scene Preview & Vertical Pipeline Card
         self.card_preview = ScenePreviewCard(self)
         v_right_col.addWidget(self.card_preview)
 
-        # Activity Log Box
+        # Card 6: Live Activity Log Box
         self.log_viewer = LogViewerWidget(self)
         self.log_viewer.setMaximumHeight(180)
         v_right_col.addWidget(self.log_viewer)
@@ -143,7 +146,31 @@ class MainWindow(QMainWindow):
 
     def _setup_logging(self):
         AppLogger.get_instance().register_callback(self.log_viewer.append_log)
-        logger.info(f"{APP_NAME} started. System diagnostics initialized.")
+        logger.info(f"{APP_NAME} started. Multi-Profile Native Bridge active.")
+
+    def _on_bridge_event(self, ev: Dict[str, Any]):
+        """Format and append live high-resolution timestamped events into the UI log."""
+        ev_type = ev.get("type", "")
+        p_name = ev.get("profileName", "Bridge")
+        ts = ev.get("timestamp", "")
+        if "T" in ts:
+            ts = ts.split("T")[-1].replace("Z", "")[:12]
+        else:
+            ts = time.strftime("%H:%M:%S.000", time.localtime())
+
+        msg = ev.get("message") or ev_type.replace("_", " ").title()
+        sc = ev.get("scene")
+        sc_str = f" [Scene {sc}]" if sc else ""
+
+        level = "INFO"
+        if "COMPLETE" in ev_type or "SUCCESS" in ev_type or "VERIFIED" in ev_type:
+            level = "SUCCESS"
+        elif "FAILED" in ev_type or "ERROR" in ev_type or "LOST" in ev_type:
+            level = "ERROR"
+        elif "STARTED" in ev_type or "UPLOADING" in ev_type or "PROGRESS" in ev_type:
+            level = "INFO"
+
+        self.log_viewer.append_log(ts, level, f"{p_name} → {msg}{sc_str}")
 
     def _init_default_project(self):
         name = self.card_project_name.get_name()
@@ -183,7 +210,6 @@ class MainWindow(QMainWindow):
         ref_display = curr_ref.name if curr_ref and curr_ref.is_file() else "Master Image"
         self.card_prompts.set_next_scene_number(next_sc)
 
-        # Update preview cards
         last_thumb = None
         if last_comp > 0:
             last_thumb = ProjectManager.get_scene_last_frame_path(self.project_state.project_root, last_comp)
@@ -194,10 +220,6 @@ class MainWindow(QMainWindow):
             current_ref_name=ref_display,
             current_ref_thumb=curr_ref
         )
-
-    def _on_chrome_profile_changed(self, profile: ChromeProfile):
-        self.current_chrome_profile = profile
-        logger.info(f"Active automation profile set to: {profile.display_name} ({profile.directory_name})")
 
     def _on_master_image_set(self, image_path: str):
         if not self.project_state:
@@ -239,12 +261,14 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Chained Evolution Studio - Help",
-            "<h3>Chained Evolution Studio Workflow</h3>"
+            "<h3>VEO 3 Chained Evolution Studio</h3>"
+            "<p><b>Multi-Profile Architecture:</b></p>"
             "<ol>"
-            "<li><b>Select Chrome Profile:</b> Link your Google Chrome profile logged into Google Flow.</li>"
-            "<li><b>Upload Master Image:</b> This image acts as the base reference for Scene 1.</li>"
-            "<li><b>Enter Scene Prompts:</b> Paste your numbered batch of scene evolution prompts.</li>"
-            "<li><b>Click Run:</b> The tool automatically generates each video scene sequentially, extracts the exact final decoded frame via FFmpeg, and hands it over as the reference for the next scene.</li>"
+            "<li>Open any of your existing Chrome profiles.</li>"
+            "<li>Install the VEO 3 Bridge Chrome Extension.</li>"
+            "<li>Keep Google Flow open to your project tab.</li>"
+            "<li>The profile will immediately appear in <b>Connected Chrome Profiles</b>.</li>"
+            "<li>Select your profile and click <b>Run</b>!</li>"
             "</ol>"
         )
 
@@ -264,7 +288,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Verify reference for starting scene
         first_scene = parsed_scenes[0].scene_number
         current_ref = self.project_state.current_chain_reference
 
@@ -276,79 +299,42 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Check Chrome Profile selected
-        if not self.current_chrome_profile:
-            saved = ChromeProfileManager.get_saved_profile()
-            if saved:
-                self.current_chrome_profile = saved
-            else:
+        # Select Connector based on Mode
+        if self.is_simulation_mode:
+            self.active_connector = SimulatedFlowConnector(step_delay_sec=1.0)
+            logger.info("Running in SIMULATION MODE.")
+        else:
+            selected_prof = self.card_multi_profile.selected_profile_name
+            if not selected_prof:
                 QMessageBox.warning(
                     self,
-                    "Chrome Account Required",
-                    "Please link your Google Chrome profile in '2 Connect Chrome Account'."
+                    "Profile Selection Required",
+                    "Please select an active Chrome profile from 'Connected Chrome Profiles' above."
                 )
                 return
+
+            if not self.bridge.is_profile_connected(selected_prof):
+                QMessageBox.warning(
+                    self,
+                    "Profile Offline",
+                    f"Selected profile '<b>{selected_prof}</b>' is offline.<br><br>"
+                    "Please ensure Google Chrome is open with this profile and the VEO 3 Bridge extension is active."
+                )
+                return
+
+            # Instantiate Extension connector bound strictly to the selected profile
+            connector = ExtensionFlowConnector(target_profile_name=selected_prof)
+            ok, msg = connector.initialize()
+            if not ok:
+                QMessageBox.warning(self, "Connection Error", msg)
+                return
+            self.active_connector = connector
+            logger.info(f"Bound execution engine to target profile: '{selected_prof}'")
 
         # Register prompts batch in project state
         self.project_state.register_scene_batch(
             [(s.scene_number, s.prompt_text) for s in parsed_scenes]
         )
-
-        # Connector - Connect to existing open session, NEVER launch conflicting instance
-        if self.is_simulation_mode:
-            self.active_connector = SimulatedFlowConnector(step_delay_sec=1.0)
-        else:
-            chrome_conn = self.card_chrome.connector
-            prof_name = self.current_chrome_profile.display_name if self.current_chrome_profile else "Default"
-            bridge = ExtensionBridgeServer.get_instance()
-            ext_connected = bridge.is_profile_connected(prof_name)
-
-            if chrome_conn.is_connected and chrome_conn.is_flow_tab_ready():
-                self.active_connector = chrome_conn
-            elif ext_connected:
-                # Extension bridge connected in this profile
-                chrome_conn.initialize(chrome_profile=self.current_chrome_profile)
-                self.active_connector = chrome_conn
-                self.card_chrome._update_system_status()
-            else:
-                # Attempt to attach to existing open Chrome session via CDP
-                ok, status, tabs = chrome_conn.connect_to_existing_chrome(port=9222)
-                if ok and (status == "CONNECTED_TO_FLOW" or status == "FLOW_TAB_NOT_FOUND"):
-                    self.active_connector = chrome_conn
-                    self.card_chrome._update_system_status()
-                elif status == "MULTIPLE_FLOW_TABS":
-                    self.card_chrome.connect_to_open_chrome()
-                    return
-                elif status == "CHROME_RUNNING_WITHOUT_CDP":
-                    # Prompt user to connect extension or restart
-                    ret = QMessageBox.question(
-                        self,
-                        "Chrome Connection Required",
-                        f"Your Chrome profile '<b>{prof_name}</b>' is open, but neither the Chrome Extension nor CDP automation is connected.<br><br>"
-                        "<b>Choose your preferred connection method:</b><br><br>"
-                        "• <b>Click 'Yes'</b> to open Extension Setup (Zero restart needed!)<br>"
-                        "• <b>Click 'No'</b> to restart Chrome with CDP automation enabled",
-                        QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
-                    )
-                    if ret == QMessageBox.Yes:
-                        self.card_chrome._open_extension_setup()
-                    elif ret == QMessageBox.No:
-                        self.card_chrome.connect_to_open_chrome()
-                    return
-                elif status == "CHROME_NOT_RUNNING":
-                    ret = QMessageBox.question(
-                        self,
-                        "Launch Chrome",
-                        f"Google Chrome is not currently open.\n\n"
-                        f"Launch Chrome with profile '{prof_name}' now?",
-                        QMessageBox.Yes | QMessageBox.No
-                    )
-                    if ret == QMessageBox.Yes:
-                        self.card_chrome._launch_connected_chrome()
-                    return
-                else:
-                    self.card_chrome.connect_to_open_chrome()
-                    return
 
         # Create ExecutionEngine worker
         self.engine = ExecutionEngine(
@@ -356,7 +342,6 @@ class MainWindow(QMainWindow):
             connector=self.active_connector,
             scenes_to_run=parsed_scenes,
             max_retries=self.max_retries,
-            chrome_profile=self.current_chrome_profile,
             parent=self
         )
 
@@ -380,6 +365,13 @@ class MainWindow(QMainWindow):
         if self.engine and self.engine.isRunning():
             self.engine.request_stop()
             self.card_prompts.set_running_state(is_running=False)
+
+    def _retry_current_scene(self):
+        """Retry the currently active or failed scene."""
+        if self.engine and self.engine.isRunning():
+            QMessageBox.information(self, "Running", "A scene is currently running. Please Pause or Stop first.")
+            return
+        self._start_execution()
 
     # ------------------ Engine Signal Handlers ------------------
 
@@ -420,27 +412,12 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_engine_paused(self, reason: str):
         self.card_prompts.set_running_state(is_running=True, is_paused=True)
-        if "Browser Connection Lost" in reason:
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Warning)
-            msg_box.setWindowTitle("Browser Connection Lost")
-            msg_box.setText("<b>The Google Flow browser connection was lost.</b>")
-            msg_box.setInformativeText(
-                "The current scene has been paused safely.<br><br>"
-                "No new scene will start until the browser connection is restored.<br><br>"
-                "Please ensure Chrome and your Google Flow tab are open, then click <b>'Reconnect'</b>."
-            )
-            btn_reconn = msg_box.addButton("Reconnect", QMessageBox.ActionRole)
-            btn_stop = msg_box.addButton("Stop", QMessageBox.RejectRole)
-            msg_box.exec()
-
-            if msg_box.clickedButton() == btn_reconn:
-                self.card_chrome.connect_to_open_chrome()
-                if self.card_chrome.connector.is_connected and self.card_chrome.connector.is_flow_tab_ready():
-                    self.engine.request_resume()
-            else:
-                self._stop_execution()
-
+        QMessageBox.warning(
+            self,
+            "Execution Paused",
+            f"<b>Automation has paused safely:</b><br><br>{reason}<br><br>"
+            "Please check your Chrome tab and click <b>Resume</b> or <b>Run</b> when ready."
+        )
 
     @Slot()
     def _on_engine_resumed(self):
@@ -476,7 +453,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
-            ExtensionBridgeServer.get_instance().stop()
+            self.bridge.stop()
         except Exception:
             pass
         super().closeEvent(event)

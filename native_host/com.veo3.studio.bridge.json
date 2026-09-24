@@ -1,0 +1,10 @@
+{
+  "name": "com.veo3.studio.bridge",
+  "description": "VEO 3 Studio Native Messaging Host",
+  "path": "veo3_native_host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://dgkjkjedkfgadbndambibilkagilagpm/",
+    "chrome-extension://eppiocemhmnlbhjplcgkofciiegomcon/"
+  ]
+}

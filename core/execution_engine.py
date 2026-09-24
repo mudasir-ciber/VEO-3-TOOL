@@ -217,6 +217,9 @@ class ExecutionEngine(QThread):
             self.state.update_scene_status(s_num, "PROCESSING", retry_count=attempt)
 
 
+            if hasattr(self.connector, "set_current_scene"):
+                self.connector.set_current_scene(s_num)
+
             # Determine reference image
             # Scene 1 uses Master Image. Scene > 1 uses previous last frame!
             current_ref = self.state.current_chain_reference
@@ -226,47 +229,66 @@ class ExecutionEngine(QThread):
                 return False, f"Reference image file is missing: {current_ref}"
 
             try:
-                # 1. Upload reference image
-                self.sig_substep_changed.emit("Reference Upload", "ACTIVE")
-                ok, msg = self.connector.upload_reference(current_ref)
-                if not ok:
-                    raise RuntimeError(f"Reference upload failed: {msg}")
-                self.sig_substep_changed.emit("Reference Upload", "COMPLETE")
+                # Check if video was already downloaded and valid from a prior interrupted run
+                video_ready = False
+                if target_video.is_file():
+                    v_ok, _ = VideoValidator.validate_video_integrity(target_video)
+                    if v_ok:
+                        video_ready = True
+                        logger.info(f"Existing valid video detected for Scene {s_num}. Proceeding directly to verification/extraction.")
 
-                if self._check_pause_or_stop():
-                    return False, "Execution stopped by user"
+                if not video_ready:
+                    # 1. Upload reference image
+                    self.sig_substep_changed.emit("Reference Upload", "ACTIVE")
+                    ok, msg = self.connector.upload_reference(current_ref)
+                    if not ok:
+                        raise RuntimeError(f"Reference upload failed: {msg}")
+                    self.sig_substep_changed.emit("Reference Upload", "COMPLETE")
 
-                # 2. Enter and verify prompt
-                self.sig_substep_changed.emit("Prompt Submission", "ACTIVE")
-                ok, msg = self.connector.submit_prompt(prompt_text)
-                if not ok:
-                    raise RuntimeError(f"Prompt submission failed: {msg}")
-                self.sig_substep_changed.emit("Prompt Submission", "COMPLETE")
+                    if self._check_pause_or_stop():
+                        return False, "Execution stopped by user"
 
-                if self._check_pause_or_stop():
-                    return False, "Execution stopped by user"
+                    # 2. Enter and verify prompt
+                    self.sig_substep_changed.emit("Prompt Submission", "ACTIVE")
+                    ok, msg = self.connector.submit_prompt(prompt_text)
+                    if not ok:
+                        raise RuntimeError(f"Prompt submission failed: {msg}")
+                    self.sig_substep_changed.emit("Prompt Submission", "COMPLETE")
 
-                # 3. Trigger generation
-                self.sig_substep_changed.emit("Video Generation", "ACTIVE")
-                ok, msg = self.connector.trigger_generation()
-                if not ok:
-                    raise RuntimeError(f"Trigger generation failed: {msg}")
+                    if self._check_pause_or_stop():
+                        return False, "Execution stopped by user"
 
-                # 4. Wait for generation completion (no fixed timer)
-                ok, msg = self.connector.wait_for_completion()
-                if not ok:
-                    raise RuntimeError(f"Generation did not complete: {msg}")
-                self.sig_substep_changed.emit("Video Generation", "COMPLETE")
+                    # 3. Trigger generation
+                    self.sig_substep_changed.emit("Video Generation", "ACTIVE")
+                    ok, msg = self.connector.trigger_generation()
+                    if not ok:
+                        raise RuntimeError(f"Trigger generation failed: {msg}")
 
-                if self._check_pause_or_stop():
-                    return False, "Execution stopped by user"
+                    # 4. Wait for generation completion (no fixed timer)
+                    ok, msg = self.connector.wait_for_completion()
+                    if not ok:
+                        raise RuntimeError(f"Generation did not complete: {msg}")
+                    self.sig_substep_changed.emit("Video Generation", "COMPLETE")
 
-                # 5. Download video
-                self.sig_substep_changed.emit("Video Download", "ACTIVE")
-                ok, msg = self.connector.download_video(target_video)
-                if not ok:
-                    raise RuntimeError(f"Video download failed: {msg}")
-                self.sig_substep_changed.emit("Video Download", "COMPLETE")
+                    if self._check_pause_or_stop():
+                        return False, "Execution stopped by user"
+
+                    # 5. Download video with sub-retries (do not regenerate if generation completed!)
+                    self.sig_substep_changed.emit("Video Download", "ACTIVE")
+                    dl_ok = False
+                    dl_msg = ""
+                    for dl_attempt in range(1, 4):
+                        ok, msg = self.connector.download_video(target_video)
+                        if ok and target_video.is_file():
+                            dl_ok = True
+                            break
+                        dl_msg = msg
+                        logger.warning(f"Download attempt {dl_attempt}/3 failed: {msg}. Retrying download...")
+                        time.sleep(2.0)
+
+                    if not dl_ok:
+                        raise RuntimeError(f"Video download failed after 3 attempts: {dl_msg}")
+                    self.sig_substep_changed.emit("Video Download", "COMPLETE")
 
                 # 6. Verify video integrity
                 self.sig_substep_changed.emit("Video Verification", "ACTIVE")
@@ -275,19 +297,28 @@ class ExecutionEngine(QThread):
                     raise RuntimeError(f"Video validation failed: {msg}")
                 self.sig_substep_changed.emit("Video Verification", "COMPLETE")
 
-                # 7. Extract exact last frame
+                # 7. Extract exact last frame with sub-retries (do not regenerate video if extraction fails!)
                 self.sig_substep_changed.emit("Last Frame Extraction", "ACTIVE")
-                ok, msg = FFmpegExtractor.extract_last_frame(target_video, target_frame)
-                if not ok:
-                    raise RuntimeError(f"Last frame extraction failed: {msg}")
+                ext_ok = False
+                ext_msg = ""
+                for ext_attempt in range(1, 4):
+                    ok, msg = FFmpegExtractor.extract_last_frame(target_video, target_frame)
+                    if ok and target_frame.is_file():
+                        v_ok, v_msg = FFmpegExtractor.verify_image(target_frame)
+                        if v_ok:
+                            ext_ok = True
+                            break
+                        ext_msg = v_msg
+                    else:
+                        ext_msg = msg
+                    logger.warning(f"Frame extraction attempt {ext_attempt}/3 failed: {ext_msg}. Retrying extraction...")
+                    time.sleep(1.0)
 
-                # 8. Verify extracted frame
-                v_ok, v_msg = FFmpegExtractor.verify_image(target_frame)
-                if not v_ok:
-                    raise RuntimeError(f"Extracted last frame is invalid: {v_msg}")
+                if not ext_ok:
+                    raise RuntimeError(f"Last frame extraction failed after 3 attempts: {ext_msg}")
                 self.sig_substep_changed.emit("Last Frame Extraction", "COMPLETE")
 
-                # 9. Mark completed and update chain reference to target_frame
+                # 8. Mark completed and update chain reference to target_frame
                 self.state.mark_scene_completed(s_num, current_ref, target_video, target_frame)
                 return True, "Success"
 

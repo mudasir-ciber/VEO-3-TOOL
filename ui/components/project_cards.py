@@ -181,6 +181,8 @@ class ScenePromptsCard(QFrame):
     sig_run_clicked = Signal()
     sig_pause_clicked = Signal()
     sig_stop_clicked = Signal()
+    sig_retry_clicked = Signal()
+    sig_open_folder_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -338,10 +340,21 @@ class ScenePromptsCard(QFrame):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.sig_stop_clicked.emit)
 
+        self.btn_retry = QPushButton("🔄  Retry Scene")
+        self.btn_retry.setObjectName("btnPause")
+        self.btn_retry.setToolTip("Retry the current active or failed scene")
+        self.btn_retry.clicked.connect(self.sig_retry_clicked.emit)
+
+        self.btn_open_folder = QPushButton("📁  Open Folder")
+        self.btn_open_folder.setObjectName("btnPause")
+        self.btn_open_folder.clicked.connect(self.sig_open_folder_clicked.emit)
+
         h_controls.addWidget(self.btn_run)
         h_controls.addWidget(self.btn_pause)
         h_controls.addWidget(self.btn_stop)
+        h_controls.addWidget(self.btn_retry)
         h_controls.addStretch()
+        h_controls.addWidget(self.btn_open_folder)
 
         layout.addLayout(h_controls)
 

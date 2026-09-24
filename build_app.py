@@ -35,6 +35,7 @@ def build():
         f"--add-data={BASE_DIR / 'app_icon.ico'};.",
         f"--add-data={BASE_DIR / 'app_icon.png'};.",
         f"--add-data={BASE_DIR / 'extension'};extension",
+        f"--add-data={BASE_DIR / 'native_host'};native_host",
         f"--add-data={pw_driver};playwright/driver",
         f"--add-data={ff_binaries};imageio_ffmpeg/binaries",
         "--hidden-import=PySide6",
