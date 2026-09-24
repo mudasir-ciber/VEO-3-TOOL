@@ -250,13 +250,18 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
         while time.time() - start_time < timeout_sec:
             # Check for error banners or failure dialogs
-            error_elem = self._page.query_selector('div[role="alert"], .error-message')
-            if error_elem and error_elem.is_visible():
-                err_text = error_elem.inner_text()
-                if "quota" in err_text.lower() or "limit" in err_text.lower():
-                    return False, f"Google Flow quota limit reached: {err_text}"
-                if "fail" in err_text.lower() or "error" in err_text.lower():
-                    return False, f"Generation failed on server: {err_text}"
+            for err_sel in getattr(selectors, "ERROR_INDICATORS", ['div[role="alert"]']):
+                try:
+                    error_elem = self._page.query_selector(err_sel)
+                    if error_elem and error_elem.is_visible():
+                        err_text = error_elem.inner_text().strip()
+                        if err_text:
+                            if "quota" in err_text.lower() or "limit" in err_text.lower():
+                                return False, f"Google Flow quota limit reached: {err_text}"
+                            if "fail" in err_text.lower() or "error" in err_text.lower():
+                                return False, f"Generation failed on server: {err_text}"
+                except Exception:
+                    pass
 
             # Check if progress spinner is active
             is_generating = False
