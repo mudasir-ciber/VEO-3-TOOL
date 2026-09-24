@@ -3,7 +3,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 from core.config import DEFAULT_BROWSER_PROFILE_DIR, GOOGLE_FLOW_URL
 from core.system_checker import SystemChecker
@@ -21,40 +21,55 @@ class PlaywrightFlowConnector(BaseFlowConnector):
         self.profile_dir = Path(DEFAULT_BROWSER_PROFILE_DIR).resolve()
         self.is_connected = False
 
-    def initialize(self, headless: bool = False, profile_dir: Optional[Path] = None) -> Tuple[bool, str]:
-        """Launch browser with persistent user profile to retain Google login."""
+    def initialize(self, headless: bool = False, profile_dir: Optional[Path] = None, chrome_profile: Optional[Any] = None) -> Tuple[bool, str]:
+        """Launch browser with selected Chrome profile to retain authentic Google login."""
         from playwright.sync_api import sync_playwright
+        from core.chrome_profile_manager import ChromeProfileManager
 
-        if profile_dir:
-            self.profile_dir = Path(profile_dir).resolve()
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
+        # Check if a specific Chrome profile was selected
+        target_user_data_dir = profile_dir or self.profile_dir
+        profile_arg = None
+
+        if chrome_profile:
+            # Verify profile lock
+            if ChromeProfileManager.is_profile_locked(chrome_profile.directory_name):
+                return False, (
+                    f"Chrome Profile In Use: '{chrome_profile.display_name}' is currently open in another Chrome session. "
+                    "Please close Chrome windows using this profile and try again."
+                )
+            chrome_user_data = ChromeProfileManager.get_chrome_user_data_dir()
+            if chrome_user_data and chrome_user_data.is_dir():
+                target_user_data_dir = chrome_user_data
+                profile_arg = f"--profile-directory={chrome_profile.directory_name}"
 
         try:
             self._pw = sync_playwright().start()
 
-            # Detect Chrome or Edge executable
             chrome_path = SystemChecker.find_chrome()
             edge_path = SystemChecker.find_edge()
 
+            args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-first-run",
+                "--no-default-browser-check"
+            ]
+            if profile_arg:
+                args.append(profile_arg)
+
             launch_kwargs = {
-                "user_data_dir": str(self.profile_dir),
+                "user_data_dir": str(target_user_data_dir),
                 "headless": headless,
                 "viewport": {"width": 1366, "height": 850},
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-first-run",
-                    "--no-default-browser-check"
-                ]
+                "args": args
             }
 
             if chrome_path:
-                logger.info(f"Launching Google Chrome via persistent profile: {chrome_path}")
+                logger.info(f"Launching Google Chrome with profile [{profile_arg or 'Default'}]: {chrome_path}")
                 launch_kwargs["executable_path"] = chrome_path
             elif edge_path:
-                logger.info(f"Launching Microsoft Edge via persistent profile: {edge_path}")
+                logger.info(f"Launching Microsoft Edge: {edge_path}")
                 launch_kwargs["executable_path"] = edge_path
             else:
-                logger.info("Using standard Playwright Chromium channel.")
                 launch_kwargs["channel"] = "chromium"
 
             self._context = self._pw.chromium.launch_persistent_context(**launch_kwargs)

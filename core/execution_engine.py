@@ -35,6 +35,7 @@ class ExecutionEngine(QThread):
         connector: BaseFlowConnector,
         scenes_to_run: List[ScenePrompt],
         max_retries: int = DEFAULT_MAX_RETRIES,
+        chrome_profile=None,
         parent=None
     ):
         super().__init__(parent)
@@ -42,6 +43,7 @@ class ExecutionEngine(QThread):
         self.connector = connector
         self.scenes_to_run = scenes_to_run
         self.max_retries = max_retries
+        self.chrome_profile = chrome_profile
 
         self._is_paused = False
         self._is_stopped = False
@@ -98,7 +100,10 @@ class ExecutionEngine(QThread):
         # Initialize connector if not already connected
         if not getattr(self.connector, "is_connected", False):
             self.sig_substep_changed.emit("Browser Session", "ACTIVE")
-            ok, msg = self.connector.initialize()
+            try:
+                ok, msg = self.connector.initialize(chrome_profile=self.chrome_profile)
+            except TypeError:
+                ok, msg = self.connector.initialize()
             if not ok:
                 self._handle_failure(0, f"Could not initialize browser connector: {msg}")
                 return

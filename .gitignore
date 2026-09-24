@@ -7,6 +7,9 @@
 credentials.json
 service_account.json
 token.json
+chrome_account_config.json
+browser_profile/
+Projects/
 
 # Python
 __pycache__/
