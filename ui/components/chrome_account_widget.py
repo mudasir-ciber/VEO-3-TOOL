@@ -271,7 +271,7 @@ class ModeBAutomationDialog(QDialog):
             )
             if ret == QMessageBox.Yes:
                 try:
-                    subprocess.run(["taskkill", "/IM", "chrome.exe", "/T"], capture_output=True)
+                    subprocess.run(["taskkill", "/F", "/IM", "chrome.exe", "/T"], capture_output=True)
                     time.sleep(1.5)
                 except Exception as e:
                     logger.error(f"Error terminating Chrome: {e}")
