@@ -226,24 +226,98 @@ class ChromeProfileManager:
             logger.error(f"Failed to save linked profile: {e}")
 
     @classmethod
-    def is_profile_locked(cls, directory_name: str) -> bool:
-        """Check if Chrome profile directory is locked by a currently running Chrome process."""
-        user_data = cls.get_chrome_user_data_dir()
-        if not user_data:
+    def is_chrome_running(cls) -> bool:
+        """Check if any Google Chrome process is currently running on Windows."""
+        try:
+            output = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                text=True,
+                errors="ignore"
+            )
+            return "chrome.exe" in output.lower()
+        except Exception:
             return False
 
-        profile_dir = user_data / directory_name
-        # Chrome lock files: Lockfile or Preferences lock
-        lock_file = profile_dir / "Lockfile"
-        pref_file = profile_dir / "Preferences"
-
-        # Check if Preferences file is locked by another process
-        if pref_file.is_file():
-            try:
-                # Try opening file in append mode to check Windows file lock
-                with open(pref_file, "a"):
-                    pass
-            except IOError:
-                return True
-
+    @classmethod
+    def is_cdp_available(cls, port: int = 9222) -> bool:
+        """Check if Chrome DevTools Protocol (CDP) port is open and responding."""
+        import urllib.request
+        url = f"http://127.0.0.1:{port}/json/version"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ChainedEvolutionStudio"})
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    return "Browser" in data or "webSocketDebuggerUrl" in data
+        except Exception:
+            pass
         return False
+
+    @classmethod
+    def get_cdp_tabs(cls, port: int = 9222) -> List[Dict]:
+        """Fetch list of open browser tabs via Chrome's CDP HTTP endpoint."""
+        import urllib.request
+        url = f"http://127.0.0.1:{port}/json/list"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "ChainedEvolutionStudio"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    targets = json.loads(resp.read().decode())
+                    return [t for t in targets if t.get("type") == "page"]
+        except Exception as e:
+            logger.debug(f"Could not fetch CDP tabs: {e}")
+        return []
+
+    @classmethod
+    def find_flow_tabs(cls, port: int = 9222) -> List[Dict]:
+        """Find any tabs that correspond to Google Flow."""
+        tabs = cls.get_cdp_tabs(port=port)
+        flow_tabs = []
+        for t in tabs:
+            url = t.get("url", "").lower()
+            title = t.get("title", "").lower()
+            if (
+                "flow.google" in url or
+                "labs.google/flow" in url or
+                "labs.google/fx/tools/flow" in url or
+                "google flow" in title or
+                ("flow" in title and "google" in title)
+            ):
+                flow_tabs.append(t)
+        return flow_tabs
+
+    @classmethod
+    def launch_chrome_with_cdp(
+        cls,
+        profile_dir_name: str = "Default",
+        port: int = 9222,
+        url: str = "https://flow.google.com/"
+    ) -> Tuple[bool, str]:
+        """Launch user's Chrome with remote debugging enabled for the specified profile."""
+        from core.system_checker import SystemChecker
+        chrome_exe = SystemChecker.find_chrome()
+        if not chrome_exe or not Path(chrome_exe).is_file():
+            return False, "Google Chrome executable was not found on this computer."
+
+        user_data = cls.get_chrome_user_data_dir()
+        if not user_data:
+            return False, "Chrome User Data directory not found."
+
+        cmd = [
+            str(chrome_exe),
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data}",
+            f"--profile-directory={profile_dir_name}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            url
+        ]
+
+        try:
+            logger.info(f"Launching Chrome with CDP on port {port} (profile: {profile_dir_name})...")
+            subprocess.Popen(cmd)
+            return True, "Chrome launched with automation endpoint"
+        except Exception as e:
+            return False, f"Failed to launch Chrome: {e}"
+

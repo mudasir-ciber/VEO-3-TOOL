@@ -48,3 +48,16 @@ class BaseFlowConnector(ABC):
     def close(self):
         """Clean up browser session."""
         pass
+
+    def is_flow_tab_ready(self) -> bool:
+        """Check if Google Flow tab is active and accessible."""
+        return True
+
+    def connect_to_existing_chrome(self, port: int = 9222, target_tab_id: Optional[str] = None) -> Tuple[bool, str, list]:
+        """Connect to already running Chrome with remote debugging."""
+        return True, "CONNECTED_TO_FLOW", []
+
+    def open_flow_tab_in_existing_chrome(self) -> Tuple[bool, str]:
+        """Open a new Google Flow tab in the connected Chrome session."""
+        return True, "Opened Google Flow"
+

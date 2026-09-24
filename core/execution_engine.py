@@ -97,19 +97,41 @@ class ExecutionEngine(QThread):
             self._handle_failure(0, err)
             return
 
-        # Initialize connector if not already connected
-        if not getattr(self.connector, "is_connected", False):
+        # Initialize / verify connector
+        prof_name = self.chrome_profile.display_name if self.chrome_profile else "Default"
+        logger.info(f"Selected Chrome Profile: {prof_name}")
+        logger.info("Checking existing browser connection...")
+
+        if not getattr(self.connector, "is_connected", False) or not self.connector.is_flow_tab_ready():
             self.sig_substep_changed.emit("Browser Session", "ACTIVE")
             try:
                 ok, msg = self.connector.initialize(chrome_profile=self.chrome_profile)
             except TypeError:
                 ok, msg = self.connector.initialize()
             if not ok:
-                self._handle_failure(0, f"Could not initialize browser connector: {msg}")
+                logger.error(f"Cannot proceed with automation: {msg}")
+                self._handle_failure(0, f"Could not connect to browser: {msg}")
                 return
             self.sig_substep_changed.emit("Browser Session", "COMPLETE")
 
+        # Verify Google Flow tab connection is active
+        if not self.connector.is_flow_tab_ready():
+            logger.error("Google Flow tab is not connected.")
+            self._handle_failure(0, "Google Flow tab is not connected. Please connect via 'Connect to Open Chrome'.")
+            return
+
+        logger.info("Existing automation session found")
+        logger.info(f"Browser profile verified: {prof_name}")
+        logger.info("Google Flow tab detected")
+        logger.info("Connected to Google Flow tab")
+        logger.info("Browser automation ready")
+        logger.info("Browser Connection: Chrome Profile Connected")
+        logger.info("Google Flow: Existing Tab Connected")
+        logger.info("Automation: Ready")
+        logger.info("Starting Scene 1...")
+
         completed_in_this_run = 0
+
 
         for idx, scene in enumerate(self.scenes_to_run):
             if self._check_pause_or_stop():
@@ -164,8 +186,17 @@ class ExecutionEngine(QThread):
 
         while attempt < self.max_retries:
             attempt += 1
+
+            # Check if browser connection is still active
+            if not getattr(self.connector, "is_flow_tab_ready", lambda: True)():
+                logger.warning("Browser Connection Lost: The Google Flow browser connection was lost.")
+                logger.warning("The current scene has been paused safely. No new scene will start until the browser connection is restored.")
+                self.request_pause()
+                return False, "Browser Connection Lost: The Google Flow browser connection was lost. Paused safely."
+
             logger.info(f"Scene {s_num} (Attempt {attempt}/{self.max_retries})")
             self.state.update_scene_status(s_num, "PROCESSING", retry_count=attempt)
+
 
             # Determine reference image
             # Scene 1 uses Master Image. Scene > 1 uses previous last frame!

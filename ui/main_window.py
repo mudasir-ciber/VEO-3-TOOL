@@ -284,29 +284,47 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-        # Check if Chrome is locked
-        if ChromeProfileManager.is_profile_locked(self.current_chrome_profile.directory_name):
-            ret = QMessageBox.question(
-                self,
-                "Chrome Profile In Use",
-                f"Chrome profile <b>{self.current_chrome_profile.display_name}</b> appears to be open in another Chrome window.<br><br>"
-                "To ensure smooth automation, it is recommended to close existing Chrome windows using this profile.<br><br>"
-                "Do you want to continue anyway?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if ret == QMessageBox.No:
-                return
-
         # Register prompts batch in project state
         self.project_state.register_scene_batch(
             [(s.scene_number, s.prompt_text) for s in parsed_scenes]
         )
 
-        # Connector
+        # Connector - Connect to existing open session, NEVER launch conflicting instance
         if self.is_simulation_mode:
             self.active_connector = SimulatedFlowConnector(step_delay_sec=1.0)
         else:
-            self.active_connector = PlaywrightFlowConnector()
+            chrome_conn = self.card_chrome.connector
+            if chrome_conn.is_connected and chrome_conn.is_flow_tab_ready():
+                self.active_connector = chrome_conn
+            else:
+                # Attempt to attach to existing open Chrome session
+                ok, status, tabs = chrome_conn.connect_to_existing_chrome(port=9222)
+                if ok and status == "CONNECTED_TO_FLOW":
+                    self.active_connector = chrome_conn
+                    self.card_chrome._update_system_status()
+                elif status == "MULTIPLE_FLOW_TABS":
+                    # Prompt user to select which Flow tab
+                    self.card_chrome.connect_to_open_chrome()
+                    return
+                elif status == "FLOW_TAB_NOT_FOUND":
+                    QMessageBox.warning(
+                        self,
+                        "Google Flow Tab Not Found",
+                        "No Google Flow tab was detected in your open Chrome browser.<br><br>"
+                        "Please open <b>https://flow.google.com/</b> in Chrome, then click 'Connect to Open Chrome' or RUN again."
+                    )
+                    return
+                elif status == "CHROME_RUNNING_WITHOUT_CDP":
+                    # Chrome is running without automation endpoint - show Mode B dialog
+                    self.card_chrome.connect_to_open_chrome()
+                    return
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Browser Connection Required",
+                        "Please connect your Chrome browser to Google Flow by clicking 'Connect to Open Chrome' in Card 2 before starting automation."
+                    )
+                    return
 
         # Create ExecutionEngine worker
         self.engine = ExecutionEngine(
@@ -378,6 +396,27 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_engine_paused(self, reason: str):
         self.card_prompts.set_running_state(is_running=True, is_paused=True)
+        if "Browser Connection Lost" in reason:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setWindowTitle("Browser Connection Lost")
+            msg_box.setText("<b>The Google Flow browser connection was lost.</b>")
+            msg_box.setInformativeText(
+                "The current scene has been paused safely.<br><br>"
+                "No new scene will start until the browser connection is restored.<br><br>"
+                "Please ensure Chrome and your Google Flow tab are open, then click <b>'Reconnect'</b>."
+            )
+            btn_reconn = msg_box.addButton("Reconnect", QMessageBox.ActionRole)
+            btn_stop = msg_box.addButton("Stop", QMessageBox.RejectRole)
+            msg_box.exec()
+
+            if msg_box.clickedButton() == btn_reconn:
+                self.card_chrome.connect_to_open_chrome()
+                if self.card_chrome.connector.is_connected and self.card_chrome.connector.is_flow_tab_ready():
+                    self.engine.request_resume()
+            else:
+                self._stop_execution()
+
 
     @Slot()
     def _on_engine_resumed(self):

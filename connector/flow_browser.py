@@ -1,12 +1,12 @@
-"""Playwright-driven Google Flow browser connector with persistent session and robust selectors."""
+"""Playwright-driven Google Flow browser connector connecting to existing automation-capable Chrome sessions."""
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, List, Dict
 
 from core.config import DEFAULT_BROWSER_PROFILE_DIR, GOOGLE_FLOW_URL
-from core.system_checker import SystemChecker
+from core.chrome_profile_manager import ChromeProfileManager
 from core.video_validator import VideoValidator
 from core.logger import logger
 from connector.flow_base import BaseFlowConnector
@@ -14,107 +14,245 @@ import connector.flow_selectors as selectors
 
 
 class PlaywrightFlowConnector(BaseFlowConnector):
-    def __init__(self):
+    def __init__(self, cdp_port: int = 9222):
         self._pw = None
+        self._browser = None
         self._context = None
         self._page = None
+        self.cdp_port = cdp_port
         self.profile_dir = Path(DEFAULT_BROWSER_PROFILE_DIR).resolve()
         self.is_connected = False
+        self.is_flow_connected = False
+        self.connected_tab_info: Dict[str, Any] = {}
+        self.chrome_profile: Optional[Any] = None
 
-    def initialize(self, headless: bool = False, profile_dir: Optional[Path] = None, chrome_profile: Optional[Any] = None) -> Tuple[bool, str]:
-        """Launch browser with selected Chrome profile to retain authentic Google login."""
-        from playwright.sync_api import sync_playwright
-        from core.chrome_profile_manager import ChromeProfileManager
-
-        # Check if a specific Chrome profile was selected
-        target_user_data_dir = profile_dir or self.profile_dir
-        profile_arg = None
-
-        if chrome_profile:
-            # Verify profile lock
-            if ChromeProfileManager.is_profile_locked(chrome_profile.directory_name):
-                return False, (
-                    f"Chrome Profile In Use: '{chrome_profile.display_name}' is currently open in another Chrome session. "
-                    "Please close Chrome windows using this profile and try again."
-                )
-            chrome_user_data = ChromeProfileManager.get_chrome_user_data_dir()
-            if chrome_user_data and chrome_user_data.is_dir():
-                target_user_data_dir = chrome_user_data
-                profile_arg = f"--profile-directory={chrome_profile.directory_name}"
-
+    def is_flow_tab_ready(self) -> bool:
+        """Check if attached Google Flow tab is alive and responsive."""
+        if not self._page:
+            return False
         try:
+            if self._page.is_closed():
+                return False
+            url = self._page.url or ""
+            return "flow.google" in url.lower() or "labs.google" in url.lower()
+        except Exception:
+            return False
+
+    def connect_to_existing_chrome(
+        self,
+        port: Optional[int] = None,
+        target_tab_id: Optional[str] = None
+    ) -> Tuple[bool, str, List[Dict[str, Any]]]:
+        """
+        Connect to an existing automation-capable Chrome session via CDP.
+        Enumerates tabs, finds the Google Flow tab, and attaches without creating about:blank.
+        """
+        active_port = port or self.cdp_port
+
+        # 1. Check if CDP port is open
+        if not ChromeProfileManager.is_cdp_available(active_port):
+            if ChromeProfileManager.is_chrome_running():
+                logger.info("Chrome process is running, but no CDP automation port is listening.")
+                return False, "CHROME_RUNNING_WITHOUT_CDP", []
+            else:
+                logger.info("Chrome is not currently running.")
+                return False, "CHROME_NOT_RUNNING", []
+
+        # 2. Start Playwright if not active
+        if not self._pw:
+            from playwright.sync_api import sync_playwright
             self._pw = sync_playwright().start()
 
-            chrome_path = SystemChecker.find_chrome()
-            edge_path = SystemChecker.find_edge()
-
-            args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check"
-            ]
-            if profile_arg:
-                args.append(profile_arg)
-
-            launch_kwargs = {
-                "user_data_dir": str(target_user_data_dir),
-                "headless": headless,
-                "viewport": {"width": 1366, "height": 850},
-                "args": args
-            }
-
-            if chrome_path:
-                logger.info(f"Launching Google Chrome with profile [{profile_arg or 'Default'}]: {chrome_path}")
-                launch_kwargs["executable_path"] = chrome_path
-            elif edge_path:
-                logger.info(f"Launching Microsoft Edge: {edge_path}")
-                launch_kwargs["executable_path"] = edge_path
-            else:
-                launch_kwargs["channel"] = "chromium"
-
-            self._context = self._pw.chromium.launch_persistent_context(**launch_kwargs)
-            self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
-
-            # Handle accidental closure
-            self._page.on("close", lambda p: logger.warning("Browser page was closed."))
-
-            self.is_connected = True
-            logger.info("Browser session initialized successfully.")
-            return True, "Browser initialized"
+        # 3. Connect over CDP
+        try:
+            logger.info(f"Connecting to Chrome DevTools Protocol at http://127.0.0.1:{active_port}...")
+            self._browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{active_port}")
         except Exception as e:
-            logger.error(f"Failed to launch browser: {e}")
-            self.is_connected = False
-            return False, f"Browser launch failed: {e}"
+            logger.error(f"CDP connection failed: {e}")
+            return False, f"CDP connection error: {e}", []
+
+        if not self._browser.contexts:
+            return False, "No browser contexts available in Chrome session", []
+
+        self._context = self._browser.contexts[0]
+        self.is_connected = True
+
+        # 4. Enumerate open pages / tabs
+        pages = self._context.pages
+        logger.info(f"Connected to Chrome session. Found {len(pages)} open browser tab(s).")
+
+        flow_tabs: List[Dict[str, Any]] = []
+        for idx, p in enumerate(pages):
+            try:
+                url = p.url or ""
+                title = p.title() or ""
+                is_flow = (
+                    "flow.google" in url.lower() or
+                    "labs.google/flow" in url.lower() or
+                    "labs.google/fx/tools/flow" in url.lower() or
+                    "google flow" in title.lower() or
+                    ("flow" in title.lower() and "google" in title.lower())
+                )
+                if is_flow:
+                    flow_tabs.append({
+                        "index": idx,
+                        "title": title or "Google Flow",
+                        "url": url,
+                        "page": p
+                    })
+            except Exception:
+                pass
+
+        # 5. Handle Tab Selection
+        if target_tab_id is not None:
+            for t in flow_tabs:
+                if str(t["index"]) == str(target_tab_id) or target_tab_id in t["url"]:
+                    self._attach_tab(t)
+                    return True, "CONNECTED_TO_FLOW", [t]
+
+        if len(flow_tabs) == 1:
+            self._attach_tab(flow_tabs[0])
+            return True, "CONNECTED_TO_FLOW", flow_tabs
+        elif len(flow_tabs) > 1:
+            logger.info(f"Multiple Google Flow tabs detected ({len(flow_tabs)}). User selection required.")
+            return True, "MULTIPLE_FLOW_TABS", flow_tabs
+        else:
+            logger.warning("No Google Flow tab detected among currently open tabs.")
+            self.is_flow_connected = False
+            return False, "FLOW_TAB_NOT_FOUND", []
+
+    def _attach_tab(self, tab_dict: Dict[str, Any]):
+        """Attach to specified tab page and configure lifecycle handlers."""
+        self._page = tab_dict["page"]
+        self.is_connected = True
+        self.is_flow_connected = True
+        self.connected_tab_info = {
+            "index": tab_dict["index"],
+            "title": tab_dict["title"],
+            "url": tab_dict["url"]
+        }
+        try:
+            self._page.bring_to_front()
+        except Exception:
+            pass
+
+        self._page.on("close", lambda p: self._on_page_closed())
+        logger.info(f"Attached to Google Flow tab: '{tab_dict['title']}' ({tab_dict['url']})")
+
+    def _on_page_closed(self):
+        logger.warning("The attached Google Flow tab was closed by user or browser.")
+        self.is_flow_connected = False
+        self._page = None
+
+    def open_flow_tab_in_existing_chrome(self) -> Tuple[bool, str]:
+        """Open a new Google Flow tab inside the currently connected Chrome session."""
+        if not self._context:
+            return False, "Browser context is not connected"
+
+        try:
+            logger.info(f"Opening Google Flow in existing Chrome session: {GOOGLE_FLOW_URL}")
+            new_page = self._context.new_page()
+            new_page.goto(GOOGLE_FLOW_URL, wait_until="domcontentloaded", timeout=45000)
+            new_page.wait_for_timeout(2000)
+            self._attach_tab({
+                "index": len(self._context.pages) - 1,
+                "title": new_page.title() or "Google Flow",
+                "url": new_page.url,
+                "page": new_page
+            })
+            return True, "Opened Google Flow tab successfully"
+        except Exception as e:
+            return False, f"Could not open Google Flow tab: {e}"
+
+    def initialize(
+        self,
+        headless: bool = False,
+        profile_dir: Optional[Path] = None,
+        chrome_profile: Optional[Any] = None
+    ) -> Tuple[bool, str]:
+        """
+        Check for existing automation session first.
+        Never launch a second conflicting Chrome process if profile is already open.
+        """
+        self.chrome_profile = chrome_profile
+
+        # 1. Already connected to live Flow tab?
+        if self.is_connected and self.is_flow_tab_ready():
+            logger.info("Using currently attached Google Flow tab.")
+            return True, "Browser connected to Google Flow"
+
+        # 2. Try connecting to existing automation session
+        ok, status, tabs = self.connect_to_existing_chrome(port=self.cdp_port)
+        if ok and status == "CONNECTED_TO_FLOW":
+            return True, "Connected to existing Google Flow tab"
+        elif status == "MULTIPLE_FLOW_TABS":
+            # Auto-select the first tab if non-interactive
+            self._attach_tab(tabs[0])
+            return True, "Connected to first Google Flow tab"
+        elif status == "FLOW_TAB_NOT_FOUND":
+            return False, "Google Flow tab not found in connected Chrome. Please open Google Flow in this Chrome profile."
+
+        # 3. If Chrome is already running without automation port, DO NOT spawn second Chrome!
+        if status == "CHROME_RUNNING_WITHOUT_CDP":
+            return False, (
+                "CHROME_RUNNING_WITHOUT_CDP: The selected Chrome profile is already open, but does not have an automation endpoint. "
+                "Please use 'Connect to Open Chrome' or restart Chrome with automation enabled."
+            )
+
+        # 4. If Chrome is not running at all, launch controlled Chrome with CDP
+        if status == "CHROME_NOT_RUNNING":
+            prof_dir_name = chrome_profile.directory_name if chrome_profile else "Default"
+            logger.info(f"Launching Chrome with profile '{prof_dir_name}' and automation port {self.cdp_port}...")
+            launch_ok, launch_msg = ChromeProfileManager.launch_chrome_with_cdp(
+                profile_dir_name=prof_dir_name,
+                port=self.cdp_port,
+                url=GOOGLE_FLOW_URL
+            )
+            if not launch_ok:
+                return False, launch_msg
+
+            # Wait for CDP endpoint to become ready
+            for _ in range(20):
+                time.sleep(0.5)
+                if ChromeProfileManager.is_cdp_available(self.cdp_port):
+                    break
+
+            if ChromeProfileManager.is_cdp_available(self.cdp_port):
+                conn_ok, conn_status, conn_tabs = self.connect_to_existing_chrome(port=self.cdp_port)
+                if conn_ok and conn_status == "CONNECTED_TO_FLOW":
+                    return True, "Connected to Google Flow tab"
+                elif conn_status == "MULTIPLE_FLOW_TABS":
+                    self._attach_tab(conn_tabs[0])
+                    return True, "Connected to Google Flow tab"
+
+        return False, "Could not initialize automation session with Google Flow."
 
     def navigate_to_flow(self) -> Tuple[bool, str]:
-        """Navigate to Google Flow URL."""
+        """Ensure current tab is on Google Flow."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
-        logger.info(f"Navigating to Google Flow: {GOOGLE_FLOW_URL}")
+        current_url = self._page.url.lower()
+        if "flow.google" in current_url or "labs.google" in current_url:
+            return True, "Already on Google Flow"
+
+        logger.info(f"Navigating tab to Google Flow: {GOOGLE_FLOW_URL}")
         try:
             self._page.goto(GOOGLE_FLOW_URL, wait_until="domcontentloaded", timeout=45000)
-            self._page.wait_for_timeout(2500)
+            self._page.wait_for_timeout(2000)
             return True, "Navigated to Flow"
         except Exception as e:
-            logger.warning(f"Primary URL failed ({e}), attempting fallback: {selectors.URLS[1]}")
-            try:
-                self._page.goto(selectors.URLS[1], wait_until="domcontentloaded", timeout=45000)
-                self._page.wait_for_timeout(2500)
-                return True, "Navigated to fallback Flow URL"
-            except Exception as e2:
-                return False, f"Could not load Google Flow: {e2}"
+            return False, f"Could not navigate to Google Flow: {e}"
 
     def check_authenticated(self) -> Tuple[bool, str]:
-        """Verify whether user is logged into Google."""
+        """Verify whether user is logged into Google Flow."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         current_url = self._page.url.lower()
         if "accounts.google.com/signin" in current_url or "accounts.google.com/v3/signin" in current_url:
             return False, "Google Account login required in the opened browser window."
 
-        # Check for presence of login buttons
         for sel in selectors.LOGIN_BUTTON_SELECTORS:
             try:
                 elem = self._page.query_selector(sel)
@@ -123,7 +261,6 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             except Exception:
                 pass
 
-        # Check for authenticated indicators
         for sel in selectors.AUTHENTICATED_SELECTORS:
             try:
                 elem = self._page.query_selector(sel)
@@ -132,7 +269,6 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             except Exception:
                 pass
 
-        # If on flow domain without sign-in prompts, assume authenticated
         if "flow" in current_url or "labs.google" in current_url:
             return True, "Authenticated (on Flow interface)"
 
@@ -141,14 +277,14 @@ class PlaywrightFlowConnector(BaseFlowConnector):
     def prepare_scene_interface(self) -> Tuple[bool, str]:
         """Ensure the generation UI is ready for new input."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
         self._page.wait_for_timeout(1000)
         return True, "Interface ready"
 
     def upload_reference(self, image_path: Path) -> Tuple[bool, str]:
-        """Upload the Master Image or previous scene's last frame as reference."""
+        """Upload Master Image or previous scene's last frame as reference."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         img = Path(image_path).resolve()
         if not img.is_file():
@@ -157,7 +293,7 @@ class PlaywrightFlowConnector(BaseFlowConnector):
         logger.info(f"Uploading reference image: {img.name}")
 
         try:
-            # First search for any file input element (even hidden)
+            # 1. Look for existing file input
             file_input = self._page.query_selector('input[type="file"]')
             if file_input:
                 file_input.set_input_files(str(img))
@@ -165,7 +301,7 @@ class PlaywrightFlowConnector(BaseFlowConnector):
                 logger.info(f"Reference image submitted via file input: {img.name}")
                 return True, "Reference uploaded"
 
-            # Fallback: look for upload buttons to click and expect file chooser
+            # 2. Look for upload buttons
             for sel in selectors.REFERENCE_UPLOAD_SELECTORS:
                 btn = self._page.query_selector(sel)
                 if btn and btn.is_visible():
@@ -183,7 +319,7 @@ class PlaywrightFlowConnector(BaseFlowConnector):
     def submit_prompt(self, prompt_text: str) -> Tuple[bool, str]:
         """Paste and verify prompt text in the prompt field."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         clean_prompt = prompt_text.strip()
         logger.info(f"Entering prompt: {clean_prompt[:50]}...")
@@ -199,7 +335,6 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             if not target_field:
                 return False, "Could not locate prompt input field in current Flow UI."
 
-            # Clear and type/fill
             target_field.click()
             target_field.fill(clean_prompt)
             self._page.wait_for_timeout(500)
@@ -207,7 +342,6 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             # Verification
             val = target_field.input_value() if hasattr(target_field, "input_value") else target_field.inner_text()
             if not val or len(val.strip()) == 0:
-                # Try clipboard/keyboard type fallback
                 target_field.focus()
                 self._page.keyboard.type(clean_prompt)
                 self._page.wait_for_timeout(500)
@@ -220,7 +354,7 @@ class PlaywrightFlowConnector(BaseFlowConnector):
     def trigger_generation(self) -> Tuple[bool, str]:
         """Click the generate button."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         try:
             gen_btn = None
@@ -241,14 +375,17 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             return False, f"Failed to trigger generation: {e}"
 
     def wait_for_completion(self, timeout_sec: float = 600.0) -> Tuple[bool, str]:
-        """Wait for video generation to complete (no arbitrary wait times)."""
+        """Wait for video generation to complete."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         logger.info(f"Waiting for video generation completion (timeout: {timeout_sec}s)...")
         start_time = time.time()
 
         while time.time() - start_time < timeout_sec:
+            if not self.is_flow_tab_ready():
+                return False, "Browser connection lost during video generation."
+
             # Check for error banners or failure dialogs
             for err_sel in getattr(selectors, "ERROR_INDICATORS", ['div[role="alert"]']):
                 try:
@@ -296,7 +433,7 @@ class PlaywrightFlowConnector(BaseFlowConnector):
     def download_video(self, destination_mp4_path: Path, timeout_sec: float = 300.0) -> Tuple[bool, str]:
         """Download the generated video and verify."""
         if not self._page:
-            return False, "Browser not initialized"
+            return False, "Browser tab not attached"
 
         dest = Path(destination_mp4_path).resolve()
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -327,14 +464,12 @@ class PlaywrightFlowConnector(BaseFlowConnector):
 
                 return False, "Download button not found in Flow UI"
 
-            # Intercept download event
             with self._page.expect_download(timeout=int(timeout_sec * 1000)) as download_info:
                 download_btn.click()
 
             download = download_info.value
             download.save_as(str(dest))
 
-            # Verify stability
             ok, msg = VideoValidator.wait_for_file_stability(dest, timeout_sec=30)
             if not ok:
                 return False, f"Download verification failed: {msg}"
@@ -346,12 +481,24 @@ class PlaywrightFlowConnector(BaseFlowConnector):
             return False, f"Failed to download video: {e}"
 
     def close(self):
-        """Close browser context."""
+        """
+        Disconnect from Chrome session.
+        Never closes user's Chrome browser or other tabs.
+        """
         try:
-            if self._context:
-                self._context.close()
+            if self._browser:
+                # In Playwright, closing a CDP browser only disconnects, leaving Chrome running
+                self._browser.close()
+                self._browser = None
             if self._pw:
                 self._pw.stop()
+                self._pw = None
         except Exception:
             pass
+
+        self._page = None
+        self._context = None
         self.is_connected = False
+        self.is_flow_connected = False
+        self.connected_tab_info = {}
+        logger.info("Disconnected from browser. User's Chrome browser remains completely open.")
